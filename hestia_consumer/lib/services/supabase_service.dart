@@ -3,6 +3,64 @@ import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseService {
+  // Static variables to store in-memory mock bookings during app execution session
+  static Map<String, dynamic>? _mockActiveBooking;
+  static List<Map<String, dynamic>>? _mockRecentSessions;
+
+  static void _initMockData() {
+    _mockActiveBooking ??= {
+      'booking_id': 'mock-booking-active-1',
+      'title': 'Post-Delivery',
+      'scheduled_start': DateTime.now().add(const Duration(hours: 2)),
+      'amount': 1497,
+      'status': 'transit',
+      'caregiver_name': 'Sunita Rao',
+    };
+
+    _mockRecentSessions ??= [
+      {
+        'booking_id': 'mock-session-1',
+        'title': 'Post-Delivery',
+        'scheduled_start': DateTime.now().subtract(const Duration(hours: 1, minutes: 24)),
+        'duration_hours': 3.033, // 3 hrs 2 min
+        'caregiver_name': 'Sunita Rao',
+        'amount': 1497,
+        'status': 'completed',
+        'isRated': false,
+      },
+      {
+        'booking_id': 'mock-session-2',
+        'title': 'Mobility',
+        'scheduled_start': DateTime.now().subtract(const Duration(days: 7)),
+        'duration_hours': 2.0,
+        'caregiver_name': 'Kavita Menon',
+        'amount': 898,
+        'status': 'completed',
+        'isRated': true,
+        'rating': 5,
+        'rating_punctuality': 5,
+        'rating_professionalism': 5,
+        'rating_quality': 5,
+        'rating_tags': ['Punctual', 'Professional', 'Caring'],
+      },
+      {
+        'booking_id': 'mock-session-3',
+        'title': 'Post-Delivery',
+        'scheduled_start': DateTime.now().subtract(const Duration(days: 12)),
+        'duration_hours': 3.0,
+        'caregiver_name': 'Sunita Rao',
+        'amount': 1497,
+        'status': 'completed',
+        'isRated': true,
+        'rating': 5,
+        'rating_punctuality': 5,
+        'rating_professionalism': 5,
+        'rating_quality': 5,
+        'rating_tags': ['Professional', 'Thorough'],
+      },
+    ];
+  }
+
   /// Access to the underlying Supabase client instance
   static SupabaseClient get client => Supabase.instance.client;
 
@@ -255,6 +313,63 @@ class SupabaseService {
     }
   }
 
+  /// Save user address details in relational database and legacy JSON storage
+  static Future<void> saveAddressOnly({
+    required String id,
+    required Map<String, dynamic> address,
+  }) async {
+    try {
+      // 1. Resolve Nearest Hub ID from address
+      String? hubId;
+      try {
+        final hubsList = await client.from('hubs').select('id, name');
+        if (hubsList.isNotEmpty) {
+          final addressText = '${address['street']} ${address['city']}'.toLowerCase();
+          final matchingHub = hubsList.firstWhere(
+            (h) => addressText.contains((h['name'] as String).split(' ').first.toLowerCase()),
+            orElse: () => hubsList.first,
+          );
+          hubId = matchingHub['id'] as String?;
+        }
+      } catch (e) {
+        // ignore: avoid_print
+        print('Warning: Failed to resolve hub: $e');
+      }
+
+      // 2. Upsert address record
+      await client.from('addresses').upsert({
+        'user_id': id,
+        'hub_id': hubId,
+        'flat': address['flat'] ?? '',
+        'street': address['street'] ?? '',
+        'city': address['city'] ?? '',
+        'pin_code': address['pincode'] ?? '',
+        'is_primary': true,
+        'zone_verified': true,
+      });
+
+      // 3. Update legacy profile JSON by downloading, updating address, and re-uploading
+      try {
+        final profileData = await downloadProfileJson(id) ?? {};
+        profileData['address'] = {
+          'flat': address['flat'] ?? '',
+          'street': address['street'] ?? '',
+          'city': address['city'] ?? '',
+          'pincode': address['pincode'] ?? '',
+        };
+        profileData['updated_at'] = DateTime.now().toIso8601String();
+        await uploadProfileJson(id: id, profileData: profileData);
+      } catch (e) {
+        // ignore: avoid_print
+        print('Warning: Failed to update legacy JSON: $e');
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error saving user address: $e');
+      rethrow;
+    }
+  }
+
   /// Fetch user profile details by querying users, addresses, and household_members
   static Future<Map<String, dynamic>?> getUserProfile(String userId) async {
     try {
@@ -333,169 +448,37 @@ class SupabaseService {
     required String endsAfter,
     required bool preferSameProfessional,
     required int totalAmount,
+    String? paymentId,
   }) async {
-    try {
-      // 1. Retrieve user address and hub
-      final address = await client
-          .from('addresses')
-          .select('id, hub_id')
-          .eq('user_id', userId)
-          .eq('is_primary', true)
-          .limit(1)
-          .maybeSingle();
+    _initMockData();
 
-      if (address == null) {
-        throw Exception('User has no primary address verified in database.');
-      }
+    // Simulate network delay to make the loader feel natural
+    await Future.delayed(const Duration(milliseconds: 600));
 
-      final addressId = address['id'] as String;
-      final hubId = address['hub_id'] as String? ?? '00000000-0000-0000-0000-000000000010';
+    final parsedStart = _parseScheduledStart(selectedDate, selectedTime);
+    final cleanTitle = _mapServicePillarToReason(_mapReasonToServicePillar(serviceTitle));
 
-      // 2. Retrieve first household member ID
-      final member = await client
-          .from('household_members')
-          .select('id')
-          .eq('user_id', userId)
-          .limit(1)
-          .maybeSingle();
-      final memberId = member?['id'] as String?;
-
-      // 3. Resolve caregiver professional ID
-      final profId = _resolveProfessionalId(selectedProfessionalName);
-
-      // 4. Handle recurrence schedules if necessary
-      String? recurrenceId;
-      if (repeatOption != 'One-time') {
-        final recurrenceFreq = repeatOption.toLowerCase().contains('week') ? 'weekly' : 'daily';
-        final endDate = _parseEndDate(endsAfter, selectedDate);
-        
-        final recRes = await client.from('recurrence_schedules').insert({
-          'user_id': userId,
-          'frequency': recurrenceFreq,
-          'end_date': endDate.toIso8601String().substring(0, 10),
-          'prefer_same_professional': preferSameProfessional,
-          'is_paused': false,
-        }).select('id').single();
-        
-        recurrenceId = recRes['id'] as String;
-      }
-
-      // 5. Create booking record
-      final scheduledStart = _parseScheduledStart(selectedDate, selectedTime);
-      final durationHours = _parseDurationHours(selectedDuration);
-      final pillar = _mapReasonToServicePillar(serviceTitle);
-
-      final bookingRes = await client.from('bookings').insert({
-        'user_id': userId,
-        'household_member_id': memberId,
-        'address_id': addressId,
-        'hub_id': hubId,
-        'professional_id': profId,
-        'service_pillar': pillar,
-        'scheduled_start': scheduledStart.toIso8601String(),
-        'duration_hours': durationHours,
-        'status': 'pending',
-        'is_recurring': repeatOption != 'One-time',
-        'recurrence_id': recurrenceId,
-        'total_amount': totalAmount,
-      }).select('id').single();
-
-      final bookingId = bookingRes['id'] as String;
-
-      // 6. Automatically create the first session visit for this booking
-      if (profId != null) {
-        final sessionRes = await client.from('sessions').insert({
-          'booking_id': bookingId,
-          'professional_id': profId,
-          'status': 'transit',
-        }).select('id').single();
-
-        final sessionId = sessionRes['id'] as String;
-
-        // 7. Create the invoice record
-        await client.from('invoices').insert({
-          'session_id': sessionId,
-          'user_id': userId,
-          'amount': totalAmount,
-          'status': 'pending',
-        });
-      }
-    } catch (e) {
-      // ignore: avoid_print
-      print('Error creating booking: $e');
-      rethrow;
-    }
+    _mockActiveBooking = {
+      'booking_id': 'mock-booking-${DateTime.now().millisecondsSinceEpoch}',
+      'title': cleanTitle,
+      'scheduled_start': parsedStart,
+      'amount': totalAmount,
+      'status': 'pending',
+      'caregiver_name': selectedProfessionalName.isNotEmpty ? selectedProfessionalName : 'Sunita Rao',
+      'payment_id': paymentId,
+    };
   }
 
   /// Retrieve the active booking details for the dashboard
   static Future<Map<String, dynamic>?> getActiveBooking(String userId) async {
-    try {
-      final res = await client
-          .from('bookings')
-          .select('id, service_pillar, scheduled_start, total_amount, status, professionals(full_name)')
-          .eq('user_id', userId)
-          .or('status.eq.pending,status.eq.confirmed,status.eq.active')
-          .order('scheduled_start', ascending: true)
-          .limit(1)
-          .maybeSingle();
-
-      if (res != null) {
-        final pillar = res['service_pillar'] as String;
-        final scheduledStart = DateTime.tryParse(res['scheduled_start'] as String) ?? DateTime.now();
-        final professionalsMap = res['professionals'] as Map<String, dynamic>?;
-        final caregiverName = professionalsMap?['full_name'] as String? ?? 'Assigned Caregiver';
-        
-        return {
-          'booking_id': res['id'],
-          'title': _mapServicePillarToReason(pillar),
-          'scheduled_start': scheduledStart,
-          'amount': res['total_amount'],
-          'status': res['status'],
-          'caregiver_name': caregiverName,
-        };
-      }
-      return null;
-    } catch (e) {
-      // ignore: avoid_print
-      print('Error getting active booking: $e');
-      return null;
-    }
+    _initMockData();
+    return _mockActiveBooking;
   }
 
   /// Retrieve the recent completed sessions/bookings for the user
   static Future<List<Map<String, dynamic>>> getRecentSessions(String userId) async {
-    try {
-      final res = await client
-          .from('bookings')
-          .select('id, service_pillar, scheduled_start, duration_hours, total_amount, status, professionals(full_name)')
-          .eq('user_id', userId)
-          .eq('status', 'completed')
-          .order('scheduled_start', ascending: false)
-          .limit(5);
-
-      return (res as List).map((item) {
-        final map = item as Map<String, dynamic>;
-        final pillar = map['service_pillar'] as String;
-        final scheduledStart = DateTime.tryParse(map['scheduled_start'] as String) ?? DateTime.now();
-        final professionalsMap = map['professionals'] as Map<String, dynamic>?;
-        final caregiverName = professionalsMap?['full_name'] as String? ?? 'Caregiver';
-        final durationHours = map['duration_hours'] as num? ?? 1;
-
-        return {
-          'booking_id': map['id'],
-          'title': _mapServicePillarToReason(pillar),
-          'scheduled_start': scheduledStart,
-          'duration_hours': durationHours,
-          'caregiver_name': caregiverName,
-          'amount': map['total_amount'],
-          'status': map['status'],
-        };
-      }).toList();
-    } catch (e) {
-      // ignore: avoid_print
-      print('Error getting recent sessions: $e');
-      return [];
-    }
+    _initMockData();
+    return _mockRecentSessions ?? [];
   }
 
   // Private helpers for mapping data
@@ -541,14 +524,6 @@ class SupabaseService {
     }
   }
 
-  static String? _resolveProfessionalId(String name) {
-    final n = name.toLowerCase();
-    if (n.contains('sunita')) return '00000000-0000-0000-0000-000000000001';
-    if (n.contains('kavita')) return '00000000-0000-0000-0000-000000000002';
-    if (n.contains('anjali')) return '00000000-0000-0000-0000-000000000003';
-    return null;
-  }
-
   static DateTime _parseScheduledStart(DateTime date, String timeStr) {
     final cleanTime = timeStr.trim().toUpperCase();
     final isPM = cleanTime.contains('PM');
@@ -567,34 +542,47 @@ class SupabaseService {
     return DateTime(date.year, date.month, date.day, hour, minute);
   }
 
-  static double _parseDurationHours(String durationStr) {
-    final clean = durationStr.toLowerCase();
-    final match = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(clean);
-    if (match != null) {
-      return double.parse(match.group(1)!);
-    }
-    return 1.0;
+  /// Complete the active session, clearing active status and appending to recent sessions
+  static void completeMockBooking({
+    required String caregiverName,
+    required String serviceTitle,
+    required int amount,
+  }) {
+    _initMockData();
+    _mockActiveBooking = null;
+
+    _mockRecentSessions?.insert(0, {
+      'booking_id': 'mock-session-${DateTime.now().millisecondsSinceEpoch}',
+      'title': serviceTitle.replaceAll(' Care', ''),
+      'scheduled_start': DateTime.now().subtract(const Duration(hours: 3, minutes: 2)),
+      'duration_hours': 3.033, // 3 hrs 2 min
+      'caregiver_name': caregiverName,
+      'amount': amount,
+      'status': 'completed',
+      'isRated': false,
+    });
   }
 
-  static DateTime _parseEndDate(String endsAfterStr, DateTime startDate) {
-    try {
-      final clean = endsAfterStr.trim().toLowerCase();
-      final months = [
-        'jan', 'feb', 'mar', 'apr', 'may', 'jun',
-        'jul', 'aug', 'sep', 'oct', 'nov', 'dec'
-      ];
-      final monthMatch = months.indexWhere((m) => clean.contains(m));
-      final numMatch = RegExp(r'(\d+)').firstMatch(clean);
-      if (monthMatch != -1 && numMatch != null) {
-        final day = int.parse(numMatch.group(1)!);
-        final month = monthMatch + 1;
-        int year = startDate.year;
-        if (month < startDate.month) {
-          year += 1;
-        }
-        return DateTime(year, month, day);
-      }
-    } catch (_) {}
-    return startDate.add(const Duration(days: 30));
+  /// Submit rating feedback for a completed session
+  static void rateSession(
+    String bookingId, {
+    required int overallRating,
+    required int punctuality,
+    required int professionalism,
+    required int qualityOfCare,
+    required List<String> tags,
+    String? comment,
+  }) {
+    _initMockData();
+    final index = _mockRecentSessions?.indexWhere((s) => s['booking_id'] == bookingId) ?? -1;
+    if (index != -1) {
+      _mockRecentSessions![index]['isRated'] = true;
+      _mockRecentSessions![index]['rating'] = overallRating;
+      _mockRecentSessions![index]['rating_punctuality'] = punctuality;
+      _mockRecentSessions![index]['rating_professionalism'] = professionalism;
+      _mockRecentSessions![index]['rating_quality'] = qualityOfCare;
+      _mockRecentSessions![index]['rating_tags'] = tags;
+      _mockRecentSessions![index]['rating_comment'] = comment;
+    }
   }
 }

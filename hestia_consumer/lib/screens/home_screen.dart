@@ -1,9 +1,19 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
+import 'dart:math';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'service_detail_screen.dart';
 import 'repeat_booking_screen.dart';
+import 'schedule_screen.dart';
+import 'tracking_screen.dart';
+import '../services/notifications_state.dart';
+import 'notifications_screen.dart';
+import 'rate_session_screen.dart';
+import 'session_detail_screen.dart';
+import 'receipt_screen.dart';
+import 'search_location_screen.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -12,7 +22,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   bool _isLoading = true;
   String _userName = 'User';
   String _userInitials = 'U';
@@ -22,19 +32,32 @@ class _HomeScreenState extends State<HomeScreen> {
   String _email = '';
   String _phone = '';
   int _currentTabIndex = 0;
+  int _oldTabIndex = 0;
   bool _showAllServices = false;
   final Map<String, int> _serviceMinutes = {};
   Map<String, dynamic>? _activeBooking;
   List<Map<String, dynamic>> _recentSessions = [];
+  AnimationController? _navAnimationController;
+  String _selectedSessionCategory = 'All';
+  String _sessionSearchQuery = '';
+
+  void _initAnimationController() {
+    _navAnimationController ??= AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    )..value = 1.0;
+  }
 
   @override
   void initState() {
     super.initState();
+    _initAnimationController();
     _loadProfileData();
   }
 
   @override
   void dispose() {
+    _navAnimationController?.dispose();
     super.dispose();
   }
 
@@ -158,13 +181,33 @@ class _HomeScreenState extends State<HomeScreen> {
   ) {
     final minutes = _serviceMinutes[label] ?? 0;
     final isAdded = minutes > 0;
+    final double hourlyPrice = double.tryParse(price.replaceAll('₹', '').trim()) ?? 0.0;
+    final double origHourlyPrice = double.tryParse(originalPrice.replaceAll('₹', '').trim()) ?? 0.0;
+    final displayPrice = isAdded 
+        ? '₹${(hourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}' 
+        : '₹${hourlyPrice.toStringAsFixed(0)}/hr';
+    final displayOriginalPrice = isAdded 
+        ? '₹${(origHourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}' 
+        : '₹${origHourlyPrice.toStringAsFixed(0)}/hr';
     return SizedBox(
       width: 130,
       child: GestureDetector(
         onTap: () {
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (context) => ServiceDetailScreen(serviceKey: label),
+              builder: (context) => ServiceDetailScreen(
+                serviceKey: label,
+                initialServicesMap: Map<String, int>.from(_serviceMinutes),
+                onMinutesChanged: (newMinutes) {
+                  setState(() {
+                    if (newMinutes <= 0) {
+                      _serviceMinutes.remove(label);
+                    } else {
+                      _serviceMinutes[label] = newMinutes;
+                    }
+                  });
+                },
+              ),
             ),
           );
         },
@@ -259,7 +302,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Row(
                       children: [
                         Text(
-                          price,
+                          displayPrice,
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
@@ -268,7 +311,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(width: 3),
                         Text(
-                          originalPrice,
+                          displayOriginalPrice,
                           style: const TextStyle(
                             fontSize: 9,
                             color: HestiaColors.textLight,
@@ -393,70 +436,781 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _recentSessionCard(String title, String subtitle, {VoidCallback? onRebook}) {
+  Widget _busyPartnerCard({
+    required String nextSlot,
+    required String duration,
+    required String price,
+    required String originalPrice,
+    required String saveAmount,
+    required String serviceTitle,
+  }) {
     return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: HestiaColors.primary, width: 1),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 5,
-            offset: Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Row(
+      width: 160,
+      margin: const EdgeInsets.only(right: 12),
+      child: Stack(
         children: [
           Container(
-            width: 44,
-            height: 44,
             decoration: BoxDecoration(
-              color: HestiaColors.inputBorder,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(20),
+              gradient: const LinearGradient(
+                colors: [Colors.white, Color(0xFFFAF2EB)],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+              border: Border.all(
+                color: HestiaColors.primary.withValues(alpha: 0.15),
+                width: 1.2,
+              ),
             ),
-            child: const Icon(Icons.person, color: HestiaColors.primary),
           ),
-          const SizedBox(width: 12),
-          Expanded(
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: CustomPaint(
+                painter: CardGridPainter(
+                  color: HestiaColors.primary.withValues(alpha: 0.04),
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(14.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
+                  nextSlot,
                   style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: HestiaColors.primary,
-                    fontSize: 16,
+                    fontSize: 12,
+                    color: HestiaColors.textMedium,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 Text(
-                  subtitle,
+                  duration,
                   style: const TextStyle(
-                    color: HestiaColors.textMedium,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: HestiaColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      price,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: HestiaColors.textDark,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      originalPrice,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: HestiaColors.textLight,
+                        decoration: TextDecoration.lineThrough,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  saveAmount,
+                  style: const TextStyle(
                     fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: HestiaColors.primary,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => ScheduleScreen(serviceTitle: serviceTitle),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: HestiaColors.primary,
+                        width: 1.5,
+                      ),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'Schedule',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.primary,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          ElevatedButton(
-            onPressed: onRebook ?? () {},
-            style: ElevatedButton.styleFrom(
-              backgroundColor: HestiaColors.primary,
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+        ],
+      ),
+    );
+  }
+
+  Widget _bookLaterCard({
+    required String title,
+    required String pillText,
+    required Widget illustration,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 110,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: const LinearGradient(
+              colors: [Colors.white, Color(0xFFFAF2EB)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            border: Border.all(
+              color: HestiaColors.primary.withValues(alpha: 0.15),
+              width: 1.2,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x0A000000),
+                blurRadius: 6,
+                offset: Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: CustomPaint(
+                    painter: CardGridPainter(
+                      color: HestiaColors.primary.withValues(alpha: 0.04),
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: HestiaColors.textDark,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: HestiaColors.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        pillText,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.primary,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Positioned(
+                bottom: 8,
+                right: 8,
+                child: illustration,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _trustCard({
+    required String title,
+    required IconData icon,
+    required List<Color> gradientColors,
+  }) {
+    return Expanded(
+      child: Container(
+        height: 135,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            colors: gradientColors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          border: Border.all(
+            color: HestiaColors.primary.withValues(alpha: 0.15),
+            width: 1.2,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0A000000),
+              blurRadius: 6,
+              offset: Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 12.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: HestiaColors.primary.withValues(alpha: 0.15),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(
+                  icon,
+                  color: HestiaColors.primary,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: HestiaColors.textDark,
+                  height: 1.25,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPlaceholderTab(String title, IconData icon) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
+        ),
+      ),
+      child: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: HestiaColors.primary.withValues(alpha: 0.2),
+                      blurRadius: 15,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  icon,
+                  color: HestiaColors.primary,
+                  size: 36,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Coming soon in the next update!',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: HestiaColors.textMedium,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecentSessionsTab() {
+    final filteredSessions = _recentSessions.where((session) {
+      final title = session['title'] as String? ?? '';
+      final caregiver = session['caregiver_name'] as String? ?? '';
+      final matchesQuery = title.toLowerCase().contains(_sessionSearchQuery) ||
+          caregiver.toLowerCase().contains(_sessionSearchQuery);
+      final matchesCat = _selectedSessionCategory == 'All' ||
+          title.toLowerCase().contains(_selectedSessionCategory.toLowerCase().replaceAll('-care', '').replaceAll(' care', ''));
+      return matchesQuery && matchesCat;
+    }).toList();
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFFCFCFC),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        automaticallyImplyLeading: false,
+        title: const Text(
+          'Sessions',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: HestiaColors.textDark,
+          ),
+        ),
+        centerTitle: true,
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Search Bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+            child: Container(
+              height: 48,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5EDE4).withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  const Icon(Icons.search, color: HestiaColors.textLight, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      onChanged: (val) {
+                        setState(() {
+                          _sessionSearchQuery = val.toLowerCase();
+                        });
+                      },
+                      style: const TextStyle(fontSize: 14, color: HestiaColors.textDark),
+                      decoration: const InputDecoration(
+                        hintText: 'Search sessions',
+                        hintStyle: TextStyle(color: HestiaColors.textLight, fontSize: 14),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(vertical: 2.0),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: const Text('Rebook'),
+          ),
+          
+          const SizedBox(height: 12),
+
+          // Horizontal Categories filter
+          SizedBox(
+            height: 38,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 24.0),
+              children: ['All', 'Post-Delivery', 'Mobility', 'Babysitting'].map((cat) {
+                final isSelected = _selectedSessionCategory == cat;
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _selectedSessionCategory = cat;
+                    });
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isSelected ? const Color(0xFF8C6239) : Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: isSelected ? const Color(0xFF8C6239) : const Color(0xFFE5D5C5),
+                        width: 1.2,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        cat,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: isSelected ? Colors.white : HestiaColors.textMedium,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Sessions Card List
+          Expanded(
+            child: filteredSessions.isNotEmpty
+                ? ListView.separated(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 120.0), // spacer for floating nav
+                    itemCount: filteredSessions.length,
+                    separatorBuilder: (context, index) => const SizedBox(height: 14),
+                    itemBuilder: (context, index) {
+                      final session = filteredSessions[index];
+                      return _buildSessionCard(session);
+                    },
+                  )
+                : _buildNoSessionsState(),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildNoSessionsState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: HestiaColors.primary.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.history_toggle_off_rounded,
+              color: HestiaColors.primary,
+              size: 32,
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'No matching sessions',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: HestiaColors.textDark,
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Try adjusting your filters or search query.',
+            style: TextStyle(
+              fontSize: 13,
+              color: HestiaColors.textMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSessionCard(Map<String, dynamic> session) {
+    final caregiverName = session['caregiver_name'] ?? 'Sunita Rao';
+    final title = session['title'] ?? 'Post-Delivery';
+    final displayTitle = title.endsWith('Care') ? title : '$title Care';
+    
+    // Parse duration formatting
+    final double durationHrs = (session['duration_hours'] as num?)?.toDouble() ?? 3.0;
+    String durationStr = '${durationHrs.toInt()} hrs';
+    if (durationHrs == 3.033) {
+      durationStr = '3 hrs 2 min';
+    } else if (durationHrs % 1 != 0) {
+      final mins = ((durationHrs % 1) * 60).round();
+      durationStr = '${durationHrs.toInt()} hrs $mins min';
+    }
+
+    final start = session['scheduled_start'] as DateTime;
+    
+    // Check if date is today
+    final now = DateTime.now();
+    final isToday = start.year == now.year && start.month == now.month && start.day == now.day;
+    final String datePrefix = isToday ? 'Today' : _formatBookingDate(start);
+    
+    final subtitle = '$datePrefix • $caregiverName';
+
+    final bool isRated = session['isRated'] ?? false;
+    final int ratingValue = session['rating'] ?? 5;
+
+    // Logo icon picker
+    IconData cardIcon;
+    Color iconColor;
+    Color iconBgColor;
+
+    if (title.toLowerCase().contains('delivery') || title.toLowerCase().contains('hospital')) {
+      cardIcon = Icons.favorite_rounded;
+      iconColor = const Color(0xFFC39365);
+      iconBgColor = const Color(0xFFFAF2EB);
+    } else if (title.toLowerCase().contains('mobility')) {
+      cardIcon = Icons.accessibility_new_rounded;
+      iconColor = const Color(0xFF1E88E5);
+      iconBgColor = const Color(0xFFE3F2FD);
+    } else {
+      cardIcon = Icons.child_care_rounded;
+      iconColor = const Color(0xFF2E7D32);
+      iconBgColor = const Color(0xFFE8F5E9);
+    }
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => SessionDetailScreen(sessionData: session),
+          ),
+        ).then((_) {
+          // reload when coming back to capture new ratings
+          setState(() {});
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFF5EBE0), width: 1.2),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x03000000),
+              blurRadius: 10,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Category circular logo
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: iconBgColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(cardIcon, color: iconColor, size: 20),
+                ),
+                const SizedBox(width: 14),
+                // Titles and rating row
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            displayTitle,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: HestiaColors.textDark,
+                            ),
+                          ),
+                          // Rating Stars
+                          if (isRated)
+                            Row(
+                              children: List.generate(5, (idx) {
+                                return Icon(
+                                  Icons.star_rounded,
+                                  color: idx < ratingValue ? const Color(0xFFDCA857) : const Color(0xFFE2E2E2),
+                                  size: 13,
+                                );
+                              }),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: HestiaColors.textMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 16),
+            const Divider(color: Color(0xFFF5EBE0), height: 1, thickness: 1.2),
+            const SizedBox(height: 16),
+
+            // Completed badge and Rebook buttons
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE8F5ED),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'Completed',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2E6B4A),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  durationStr,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: HestiaColors.textLight,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const Spacer(),
+                // Rebook action
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => RepeatBookingScreen(
+                          serviceTitle: title == 'Post-Delivery' ? 'Post-Delivery Care' : 
+                                        title == 'Mobility' ? 'Mobility Support' :
+                                        title == 'Babysitting' ? 'Certified Babysitting' :
+                                        'Admin Concierge',
+                          selectedDate: DateTime.now(),
+                          selectedTime: '9:00 AM',
+                          selectedDuration: '3 hrs',
+                        ),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: const Color(0xFFE5D5C5),
+                        width: 1.2,
+                      ),
+                    ),
+                    child: const Text(
+                      'Rebook',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: HestiaColors.textMedium,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            
+            // Unrated / view receipt links
+            Padding(
+              padding: const EdgeInsets.only(top: 14.0),
+              child: Row(
+                children: [
+                  if (!isRated) ...[
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => RateSessionScreen(sessionData: session),
+                          ),
+                        ).then((_) {
+                          setState(() {});
+                        });
+                      },
+                      child: const Text(
+                        'Rate this session',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF8C6239),
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => ReceiptScreen(sessionData: session),
+                        ),
+                      );
+                    },
+                    child: const Text(
+                      'View receipt',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: HestiaColors.textMedium,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -603,683 +1357,797 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    Widget buildNavItem(int index, IconData icon) {
-      final isSelected = index == _currentTabIndex;
-      return GestureDetector(
-        onTap: () {
-          setState(() {
-            _currentTabIndex = index;
-          });
-        },
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeInOut,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? Colors.white.withValues(alpha: 0.9)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(50),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: Colors.white.withValues(alpha: 0.25),
-                      blurRadius: 8,
-                      spreadRadius: 1,
-                    ),
-                  ]
-                : [],
-          ),
-          child: Icon(
-            icon,
-            color: isSelected ? HestiaColors.primary : Colors.white70,
-            size: 24,
-          ),
-        ),
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: HestiaColors.primary),
       );
     }
+    switch (_currentTabIndex) {
+      case 0:
+        return _buildHomeTab();
+      case 1:
+        return _buildPlaceholderTab('My Bookings', Icons.calendar_month);
+      case 2:
+        return _buildRecentSessionsTab();
+      case 3:
+        return _buildPlaceholderTab('My Profile', Icons.person);
+      default:
+        return _buildHomeTab();
+    }
+  }
+
+  Widget _buildHomeTab() {
+    return SingleChildScrollView(
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment(0.0, 0.4),
+            colors: [
+              Color.fromARGB(
+                255,
+                94,
+                61,
+                29,
+              ), // Light warm tan/mocha
+              Color.fromARGB(
+                255,
+                139,
+                106,
+                65,
+              ), // Soft warm apricot/cream
+              Color.fromARGB(
+                255,
+                252,
+                252,
+                252,
+              ), // Light pale cream/yellow
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16.0,
+              vertical: 12.0,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Top greeting
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'HESTIA',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 3,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'WELCOME',
+                            style: TextStyle(
+                              color: HestiaColors.inputBorder,
+                              fontSize: 32,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _userName.toUpperCase(),
+                            style: const TextStyle(
+                              color: Color(0xFFF9EFE3),
+                              fontSize: 24,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) => const SearchLocationScreen(),
+                                ),
+                              ).then((_) => _loadProfileData());
+                            },
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.location_on, color: Colors.white70, size: 14),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    _location,
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 13,
+                                      decoration: TextDecoration.underline,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => const NotificationsScreen(),
+                              ),
+                            );
+                          },
+                          child: AnimatedBuilder(
+                            animation: NotificationsState.instance,
+                            builder: (context, child) {
+                              final count = NotificationsState.instance.unreadCount;
+                              return Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  Container(
+                                    width: 44,
+                                    height: 44,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.15),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.notifications_none_rounded,
+                                      color: Colors.white,
+                                      size: 22,
+                                    ),
+                                  ),
+                                  if (count > 0)
+                                    Positioned(
+                                      top: -1,
+                                      right: -1,
+                                      child: Container(
+                                        width: 10,
+                                        height: 10,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFFC0392B), // Premium red dot badge
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => const ProfileScreen(),
+                              ),
+                            ).then((_) => _loadProfileData());
+                          },
+                          child: Container(
+                            width: 60,
+                            height: 60,
+                            decoration: const BoxDecoration(
+                              color: Color.fromARGB(255, 73, 46, 27),
+                              shape: BoxShape.circle,
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              _userInitials,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Active booking card
+                _activeBooking != null
+                    ? GestureDetector(
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => TrackingScreen(
+                                bookingData: _activeBooking!,
+                              ),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color.fromARGB(255, 65, 42, 27),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: HestiaColors.primary),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x14000000),
+                                blurRadius: 8,
+                                offset: Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.health_and_safety,
+                                  color: HestiaColors.primary,
+                                  size: 28,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'ACTIVE BOOKING',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: HestiaColors.inputBorder,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 1.0,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '${_activeBooking!['title']} · ${_formatBookingDate(_activeBooking!['scheduled_start'] as DateTime)}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${_activeBooking!['caregiver_name']} · ${_formatBookingTime(_activeBooking!['scheduled_start'] as DateTime)}',
+                                      style: const TextStyle(
+                                        color: Colors.white60,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(
+                                Icons.chevron_right,
+                                color: HestiaColors.inputBorder,
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: HestiaColors.primary.withValues(alpha: 0.25),
+                            width: 1.2,
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x0A000000),
+                              blurRadius: 10,
+                              offset: Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: HestiaColors.primary.withValues(alpha: 0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.calendar_today_outlined,
+                                color: HestiaColors.primary,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: const [
+                                  Text(
+                                    'NO ACTIVE BOOKING',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: HestiaColors.textAccent,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1.2,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'No upcoming sessions scheduled',
+                                    style: TextStyle(
+                                      color: HestiaColors.textDark,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'Select a service below to book a care visit',
+                                    style: TextStyle(
+                                      color: HestiaColors.textMedium,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                const SizedBox(height: 18),
+
+                // Household Care Profile (if data loaded)
+                if (_primaryReason.isNotEmpty ||
+                    _members.isNotEmpty) ...[
+                  _buildCareProfileSection(),
+                  const SizedBox(height: 18),
+                ],
+
+                // Our Services heading
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Our Services',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.black,
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _showAllServices = !_showAllServices;
+                        });
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _showAllServices
+                              ? Colors.white
+                              : HestiaColors.primary,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: HestiaColors.primary,
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Text(
+                          _showAllServices
+                              ? 'Show less'
+                              : 'See all',
+                          style: TextStyle(
+                            color: _showAllServices
+                                ? HestiaColors.primary
+                                : Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Services — single row or 2-row grid depending on _showAllServices
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  transitionBuilder: (child, animation) =>
+                      FadeTransition(
+                        opacity: animation,
+                        child: SizeTransition(
+                          sizeFactor: animation,
+                          alignment: Alignment.topCenter,
+                          child: child,
+                        ),
+                      ),
+                  child: _showAllServices
+                      ? KeyedSubtree(
+                          key: const ValueKey('grid'),
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final double totalWidth = constraints.maxWidth;
+                              final double columnWidth = (totalWidth - 20.0) / 3;
+                              final double desiredHeight = 185.0;
+                              final double aspect = columnWidth / desiredHeight;
+
+                              return GridView.count(
+                                crossAxisCount: 3,
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                childAspectRatio: aspect,
+                                children: [
+                                  _serviceTile(
+                                    'Post-Delivery',
+                                    Icons.local_hospital,
+                                    '₹499',
+                                    '₹999',
+                                    '4.9',
+                                    '38.6k',
+                                  ),
+                                  _serviceTile(
+                                    'Babysitting',
+                                    Icons.child_care,
+                                    '₹399',
+                                    '₹799',
+                                    '4.9',
+                                    '31.5k',
+                                  ),
+                                  _serviceTile(
+                                    'Mobility',
+                                    Icons.accessibility_new,
+                                    '₹449',
+                                    '₹899',
+                                    '4.9',
+                                    '39.7k',
+                                  ),
+                                  _serviceTile(
+                                    'Pre-Pregnancy',
+                                    Icons.favorite_border,
+                                    '₹599',
+                                    '₹999',
+                                    '4.9',
+                                    '13.4k',
+                                  ),
+                                  _serviceTile(
+                                    'Bathing',
+                                    Icons.bathtub,
+                                    '₹349',
+                                    '₹699',
+                                    '4.9',
+                                    '4.5k',
+                                  ),
+                                  _serviceTile(
+                                    'Concierge',
+                                    Icons.room_service,
+                                    '₹299',
+                                    '₹599',
+                                    '4.9',
+                                    '3.3k',
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        )
+                      : KeyedSubtree(
+                          key: const ValueKey('row'),
+                          child: SizedBox(
+                            height: 185,
+                            child: ListView(
+                              scrollDirection: Axis.horizontal,
+                              physics:
+                                  const BouncingScrollPhysics(),
+                              children: [
+                                _serviceTile(
+                                  'Post-Delivery',
+                                  Icons.local_hospital,
+                                  '₹499',
+                                  '₹999',
+                                  '4.9',
+                                  '38.6k',
+                                ),
+                                const SizedBox(width: 10),
+                                _serviceTile(
+                                  'Babysitting',
+                                  Icons.child_care,
+                                  '₹399',
+                                  '₹799',
+                                  '4.9',
+                                  '31.5k',
+                                ),
+                                const SizedBox(width: 10),
+                                _serviceTile(
+                                  'Mobility',
+                                  Icons.accessibility_new,
+                                  '₹449',
+                                  '₹899',
+                                  '4.9',
+                                  '39.7k',
+                                ),
+                                const SizedBox(width: 10),
+                                _serviceTile(
+                                  'Pre-Pregnancy',
+                                  Icons.favorite_border,
+                                  '₹599',
+                                  '₹999',
+                                  '4.9',
+                                  '13.4k',
+                                ),
+                                const SizedBox(width: 10),
+                                _serviceTile(
+                                  'Bathing',
+                                  Icons.bathtub,
+                                  '₹349',
+                                  '₹699',
+                                  '4.9',
+                                  '4.5k',
+                                ),
+                                const SizedBox(width: 10),
+                                _serviceTile(
+                                  'Concierge',
+                                  Icons.room_service,
+                                  '₹299',
+                                  '₹599',
+                                  '4.9',
+                                  '3.3k',
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 18),
+
+                // ── Busy Partners Section ───────────────────
+                const Text(
+                  'Our partners are busy right now',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Schedule & book for later',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: HestiaColors.textMedium,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 200,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    children: [
+                      _busyPartnerCard(
+                        nextSlot: 'Next slot at 4:00 PM',
+                        duration: '0.5 hr',
+                        price: '₹250',
+                        originalPrice: '₹500',
+                        saveAmount: 'Save ₹250',
+                        serviceTitle: 'Post-Delivery Care',
+                      ),
+                      _busyPartnerCard(
+                        nextSlot: 'Next slot at 4:00 PM',
+                        duration: '1 hr',
+                        price: '₹499',
+                        originalPrice: '₹999',
+                        saveAmount: 'Save ₹500',
+                        serviceTitle: 'Post-Delivery Care',
+                      ),
+                      _busyPartnerCard(
+                        nextSlot: 'Next slot at 4:00 PM',
+                        duration: '1.5 hr',
+                        price: '₹749',
+                        originalPrice: '₹1499',
+                        saveAmount: 'Save ₹750',
+                        serviceTitle: 'Post-Delivery Care',
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // ── Book for Later Section ──────────────────
+                const Text(
+                  'Book for Later',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Select your slot & stay worry-free',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: HestiaColors.textMedium,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    _bookLaterCard(
+                      title: 'Schedule\nBooking',
+                      pillText: 'UP TO 50% OFF',
+                      illustration: const ClockIllustration(
+                        primaryColor: HestiaColors.primary,
+                      ),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => const ScheduleScreen(
+                              serviceTitle: 'Post-Delivery Care',
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 12),
+                    _bookLaterCard(
+                      title: 'Recurring\nBooking',
+                      pillText: 'UP TO 25% OFF',
+                      illustration: const CalendarIllustration(
+                        primaryColor: HestiaColors.primary,
+                      ),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => RepeatBookingScreen(
+                              serviceTitle: 'Post-Delivery Care',
+                              selectedDate: DateTime.now(),
+                              selectedTime: '9:00 AM',
+                              selectedDuration: '3 hrs',
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+
+                // ── Reliable & Trustworthy Section ──────────
+                const SizedBox(height: 12),
+                const Text(
+                  'Reliable & Trustworthy',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Ensuring integrity through verified standards',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: HestiaColors.textMedium,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    _trustCard(
+                      title: 'Verified\nProfessionals\nYou Can Trust',
+                      icon: Icons.verified_user_rounded,
+                      gradientColors: [Colors.white, const Color(0xFFF9EFE3)],
+                    ),
+                    const SizedBox(width: 10),
+                    _trustCard(
+                      title: 'Well Trained to\ndeliver great\nservice',
+                      icon: Icons.school_rounded,
+                      gradientColors: [Colors.white, const Color(0xFFFAF2EB)],
+                    ),
+                    const SizedBox(width: 10),
+                    _trustCard(
+                      title: 'Safe, reliable,\nand consistent\nevery single time',
+                      icon: Icons.health_and_safety_rounded,
+                      gradientColors: [Colors.white, const Color(0xFFFFF9F5)],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+
+                // ── Hestia Brand Footer ─────────────────────
+                Center(
+                  child: Column(
+                    children: [
+                      const Text(
+                        'Safe Care.\nZero Stress.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          color: HestiaColors.primary,
+                          height: 1.25,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'HESTIA',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: HestiaColors.primary,
+                          letterSpacing: 3.0,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Trusted by 450k+ families',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: HestiaColors.textMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(
+                  height: 120,
+                ), // Spacer so scrolling content goes behind navbar
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  @override
+  Widget build(BuildContext context) {
+    _initAnimationController();
+    final controller = _navAnimationController!;
 
     return Scaffold(
       extendBody: true,
       backgroundColor: const Color.fromARGB(255, 252, 252, 252),
       body: Stack(
         children: [
-          // ── Main content ──────────────────────────────────────────────
-          _isLoading
-              ? const Center(
-                  child: CircularProgressIndicator(color: HestiaColors.primary),
-                )
-              : SingleChildScrollView(
-                  child: Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment(0.0, 0.4),
-                        colors: [
-                          Color.fromARGB(
-                            255,
-                            94,
-                            61,
-                            29,
-                          ), // Light warm tan/mocha
-                          Color.fromARGB(
-                            255,
-                            139,
-                            106,
-                            65,
-                          ), // Soft warm apricot/cream
-                          Color.fromARGB(
-                            255,
-                            252,
-                            252,
-                            252,
-                          ), // Light pale cream/yellow
-                        ],
-                      ),
-                    ),
-                    child: SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16.0,
-                          vertical: 12.0,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Top greeting
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const Text(
-                                        'HESTIA',
-                                        style: TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 3,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 12),
-                                      const Text(
-                                        'WELCOME',
-                                        style: TextStyle(
-                                          color: HestiaColors.inputBorder,
-                                          fontSize: 32,
-                                          fontWeight: FontWeight.w900,
-                                          letterSpacing: 1.5,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        _userName.toUpperCase(),
-                                        style: const TextStyle(
-                                          color: Color(0xFFF9EFE3),
-                                          fontSize: 24,
-                                          fontWeight: FontWeight.w800,
-                                          letterSpacing: 1.5,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        _location,
-                                        style: const TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 60,
-                                      height: 60,
-                                      decoration: const BoxDecoration(
-                                        color: Color.fromARGB(255, 73, 46, 27),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      alignment: Alignment.center,
-                                      child: Text(
-                                        _userInitials,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    // SizedBox(
-                                    //   width: 44,
-                                    //   height: 28,
-                                    //   child: IconButton(
-                                    //     padding: EdgeInsets.zero,
-                                    //     icon: const Icon(
-                                    //       Icons.logout,
-                                    //       size: 18,
-                                    //       color: Colors.white70,
-                                    //     ),
-                                    //     onPressed: () async {
-                                    //       await SupabaseService.signOut();
-                                    //       if (context.mounted) {
-                                    //         ScaffoldMessenger.of(
-                                    //           context,
-                                    //         ).showSnackBar(
-                                    //           const SnackBar(
-                                    //             content: Text('Signed out'),
-                                    //           ),
-                                    //         );
-                                    //         Navigator.of(
-                                    //           context,
-                                    //         ).pushAndRemoveUntil(
-                                    //           MaterialPageRoute(
-                                    //             builder: (c) =>
-                                    //                 const LandingScreen(),
-                                    //           ),
-                                    //           (route) => false,
-                                    //         );
-                                    //       }
-                                    //     },
-                                    //     tooltip: 'Logout',
-                                    //   ),
-                                    // ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-
-                            // Active booking card
-                            _activeBooking != null
-                                ? GestureDetector(
-                                    onTap: () {
-                                      // Optional: Navigate to booking detail screen
-                                    },
-                                    child: Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(14),
-                                      decoration: BoxDecoration(
-                                        color: const Color.fromARGB(255, 65, 42, 27),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: HestiaColors.primary),
-                                        boxShadow: const [
-                                          BoxShadow(
-                                            color: Color(0x14000000),
-                                            blurRadius: 8,
-                                            offset: Offset(0, 10),
-                                          ),
-                                        ],
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            width: 56,
-                                            height: 56,
-                                            decoration: BoxDecoration(
-                                              color: Colors.white,
-                                              borderRadius: BorderRadius.circular(12),
-                                            ),
-                                            child: const Icon(
-                                              Icons.health_and_safety,
-                                              color: HestiaColors.primary,
-                                              size: 28,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                const Text(
-                                                  'ACTIVE BOOKING',
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                    color: HestiaColors.inputBorder,
-                                                    fontWeight: FontWeight.bold,
-                                                    letterSpacing: 1.0,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 6),
-                                                Text(
-                                                  '${_activeBooking!['title']} · ${_formatBookingDate(_activeBooking!['scheduled_start'] as DateTime)}',
-                                                  style: const TextStyle(
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.w700,
-                                                    fontSize: 15,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  '${_activeBooking!['caregiver_name']} · ${_formatBookingTime(_activeBooking!['scheduled_start'] as DateTime)}',
-                                                  style: const TextStyle(
-                                                    color: Colors.white60,
-                                                    fontSize: 13,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          const Icon(
-                                            Icons.chevron_right,
-                                            color: HestiaColors.inputBorder,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  )
-                                : Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: Border.all(
-                                        color: HestiaColors.primary.withValues(alpha: 0.25),
-                                        width: 1.2,
-                                      ),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          color: Color(0x0A000000),
-                                          blurRadius: 10,
-                                          offset: Offset(0, 4),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Container(
-                                          width: 48,
-                                          height: 48,
-                                          decoration: BoxDecoration(
-                                            color: HestiaColors.primary.withValues(alpha: 0.1),
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: const Icon(
-                                            Icons.calendar_today_outlined,
-                                            color: HestiaColors.primary,
-                                            size: 20,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 14),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: const [
-                                              Text(
-                                                'NO ACTIVE BOOKING',
-                                                style: TextStyle(
-                                                  fontSize: 11,
-                                                  color: HestiaColors.textAccent,
-                                                  fontWeight: FontWeight.bold,
-                                                  letterSpacing: 1.2,
-                                                ),
-                                              ),
-                                              SizedBox(height: 4),
-                                              Text(
-                                                'No upcoming sessions scheduled',
-                                                style: TextStyle(
-                                                  color: HestiaColors.textDark,
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 14,
-                                                ),
-                                              ),
-                                              SizedBox(height: 2),
-                                              Text(
-                                                'Select a service below to book a care visit',
-                                                style: TextStyle(
-                                                  color: HestiaColors.textMedium,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                            const SizedBox(height: 18),
-
-                            // Household Care Profile (if data loaded)
-                            if (_primaryReason.isNotEmpty ||
-                                _members.isNotEmpty) ...[
-                              _buildCareProfileSection(),
-                              const SizedBox(height: 18),
-                            ],
-
-                            // Our Services heading
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'Our Services',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.black,
-                                  ),
-                                ),
-                                GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      _showAllServices = !_showAllServices;
-                                    });
-                                  },
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: _showAllServices
-                                          ? Colors.white
-                                          : HestiaColors.primary,
-                                      borderRadius: BorderRadius.circular(20),
-                                      border: Border.all(
-                                        color: HestiaColors.primary,
-                                        width: 1.5,
-                                      ),
-                                    ),
-                                    child: Text(
-                                      _showAllServices
-                                          ? 'Show less'
-                                          : 'See all',
-                                      style: TextStyle(
-                                        color: _showAllServices
-                                            ? HestiaColors.primary
-                                            : Colors.white,
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-
-                            // Services — single row or 2-row grid depending on _showAllServices
-                            AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 300),
-                              switchInCurve: Curves.easeOut,
-                              switchOutCurve: Curves.easeIn,
-                              transitionBuilder: (child, animation) =>
-                                  FadeTransition(
-                                    opacity: animation,
-                                    child: SizeTransition(
-                                      sizeFactor: animation,
-                                      alignment: Alignment.topCenter,
-                                      child: child,
-                                    ),
-                                  ),
-                              child: _showAllServices
-                                  ? KeyedSubtree(
-                                      key: const ValueKey('grid'),
-                                      child: GridView.count(
-                                        crossAxisCount: 3,
-                                        shrinkWrap: true,
-                                        physics:
-                                            const NeverScrollableScrollPhysics(),
-                                        crossAxisSpacing: 10,
-                                        mainAxisSpacing: 10,
-                                        childAspectRatio: 0.82,
-                                        children: [
-                                          _serviceTile(
-                                            'Post-Delivery',
-                                            Icons.local_hospital,
-                                            '₹499',
-                                            '₹999',
-                                            '4.9',
-                                            '38.6k',
-                                          ),
-                                          _serviceTile(
-                                            'Babysitting',
-                                            Icons.child_care,
-                                            '₹399',
-                                            '₹799',
-                                            '4.9',
-                                            '31.5k',
-                                          ),
-                                          _serviceTile(
-                                            'Mobility',
-                                            Icons.accessibility_new,
-                                            '₹449',
-                                            '₹899',
-                                            '4.9',
-                                            '39.7k',
-                                          ),
-                                          _serviceTile(
-                                            'Pre-Pregnancy',
-                                            Icons.favorite_border,
-                                            '₹599',
-                                            '₹999',
-                                            '4.9',
-                                            '13.4k',
-                                          ),
-                                          _serviceTile(
-                                            'Bathing',
-                                            Icons.bathtub,
-                                            '₹349',
-                                            '₹699',
-                                            '4.9',
-                                            '4.5k',
-                                          ),
-                                          _serviceTile(
-                                            'Concierge',
-                                            Icons.room_service,
-                                            '₹299',
-                                            '₹599',
-                                            '4.9',
-                                            '3.3k',
-                                          ),
-                                        ],
-                                      ),
-                                    )
-                                  : KeyedSubtree(
-                                      key: const ValueKey('row'),
-                                      child: SizedBox(
-                                        height: 185,
-                                        child: ListView(
-                                          scrollDirection: Axis.horizontal,
-                                          physics:
-                                              const BouncingScrollPhysics(),
-                                          children: [
-                                            _serviceTile(
-                                              'Post-Delivery',
-                                              Icons.local_hospital,
-                                              '₹499',
-                                              '₹999',
-                                              '4.9',
-                                              '38.6k',
-                                            ),
-                                            const SizedBox(width: 10),
-                                            _serviceTile(
-                                              'Babysitting',
-                                              Icons.child_care,
-                                              '₹399',
-                                              '₹799',
-                                              '4.9',
-                                              '31.5k',
-                                            ),
-                                            const SizedBox(width: 10),
-                                            _serviceTile(
-                                              'Mobility',
-                                              Icons.accessibility_new,
-                                              '₹449',
-                                              '₹899',
-                                              '4.9',
-                                              '39.7k',
-                                            ),
-                                            const SizedBox(width: 10),
-                                            _serviceTile(
-                                              'Pre-Pregnancy',
-                                              Icons.favorite_border,
-                                              '₹599',
-                                              '₹999',
-                                              '4.9',
-                                              '13.4k',
-                                            ),
-                                            const SizedBox(width: 10),
-                                            _serviceTile(
-                                              'Bathing',
-                                              Icons.bathtub,
-                                              '₹349',
-                                              '₹699',
-                                              '4.9',
-                                              '4.5k',
-                                            ),
-                                            const SizedBox(width: 10),
-                                            _serviceTile(
-                                              'Concierge',
-                                              Icons.room_service,
-                                              '₹299',
-                                              '₹599',
-                                              '4.9',
-                                              '3.3k',
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                            ),
-                            const SizedBox(height: 12),
-
-                            // Recent sessions
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'Recent Sessions',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.black,
-                                  ),
-                                ),
-                                GestureDetector(
-                                  onTap: () {},
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: HestiaColors.primary,
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: const Text(
-                                      'History',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-
-                            _recentSessions.isNotEmpty
-                                ? ListView.separated(
-                                    shrinkWrap: true,
-                                    physics: const NeverScrollableScrollPhysics(),
-                                    itemCount: _recentSessions.length,
-                                    separatorBuilder: (context, index) =>
-                                        const SizedBox(height: 10),
-                                    itemBuilder: (context, index) {
-                                      final session = _recentSessions[index];
-                                      final title = '${session['title']} · ${session['caregiver_name']}';
-                                      final date = session['scheduled_start'] as DateTime;
-                                      final duration = session['duration_hours'] as num;
-                                      
-                                      final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                                      final dateStr = '${months[date.month - 1]} ${date.day}';
-                                      final subtitle = '$dateStr · ${duration % 1 == 0 ? duration.toInt() : duration} hrs';
-
-                                      return _recentSessionCard(
-                                        title,
-                                        subtitle,
-                                        onRebook: () {
-                                          Navigator.of(context).push(
-                                            MaterialPageRoute(
-                                              builder: (context) => RepeatBookingScreen(
-                                                serviceTitle: session['title'] == 'Post-Delivery' ? 'Post-Delivery Care' : 
-                                                              session['title'] == 'Pre-Pregnancy' ? 'Pre-Pregnancy Care' :
-                                                              session['title'] == 'Babysitting' ? 'Certified Babysitting' :
-                                                              session['title'] == 'Mobility' ? 'Mobility Support' :
-                                                              session['title'] == 'Bathing & Grooming' ? 'Bathing & Grooming' :
-                                                              'Admin Concierge',
-                                                selectedDate: DateTime.now(),
-                                                selectedTime: '8:00 AM',
-                                                selectedDuration: '1 hr',
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      );
-                                    },
-                                  )
-                                : Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: Border.all(
-                                        color: HestiaColors.primary.withValues(alpha: 0.15),
-                                        width: 1.2,
-                                      ),
-                                    ),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.history_toggle_off,
-                                          color: HestiaColors.textLight.withValues(alpha: 0.6),
-                                          size: 40,
-                                        ),
-                                        const SizedBox(height: 12),
-                                        const Text(
-                                          'No Care History Yet',
-                                          style: TextStyle(
-                                            color: HestiaColors.textDark,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 15,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        const Text(
-                                          'Completed care sessions will be listed here.',
-                                          style: TextStyle(
-                                            color: HestiaColors.textMedium,
-                                            fontSize: 12,
-                                          ),
-                                          textAlign: TextAlign.center,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                            const SizedBox(
-                              height: 120,
-                            ), // Spacer so scrolling content goes behind navbar
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+          _buildBody(),
 
           // ── Floating cart pill ────────────────────────────────────────
           AnimatedPositioned(
@@ -1422,20 +2290,431 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    buildNavItem(0, Icons.home),
-                    buildNavItem(1, Icons.calendar_month),
-                    buildNavItem(2, Icons.schedule),
-                    buildNavItem(3, Icons.person),
-                  ],
+                child: SizedBox(
+                  height: 48,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double totalWidth = constraints.maxWidth;
+                      final double tabWidth = totalWidth / 4;
+
+                      return AnimatedBuilder(
+                        animation: controller,
+                        builder: (context, child) {
+                          final double t = controller.value;
+                          final double pillNormalWidth = 72.0;
+
+                          final double centerSource = (_oldTabIndex + 0.5) * tabWidth;
+                          final double centerTarget = (_currentTabIndex + 0.5) * tabWidth;
+
+                          double tLeft;
+                          double tRight;
+
+                          if (_currentTabIndex > _oldTabIndex) {
+                            tRight = CurveTween(curve: Curves.easeOutQuart).transform(t);
+                            tLeft = CurveTween(curve: Curves.easeInQuad).transform(t);
+                          } else if (_currentTabIndex < _oldTabIndex) {
+                            tLeft = CurveTween(curve: Curves.easeOutQuart).transform(t);
+                            tRight = CurveTween(curve: Curves.easeInQuad).transform(t);
+                          } else {
+                            tLeft = t;
+                            tRight = t;
+                          }
+
+                          final double leftSource = centerSource - pillNormalWidth / 2;
+                          final double leftTarget = centerTarget - pillNormalWidth / 2;
+                          final double rightSource = centerSource + pillNormalWidth / 2;
+                          final double rightTarget = centerTarget + pillNormalWidth / 2;
+
+                          double currentLeft = leftSource + (leftTarget - leftSource) * tLeft;
+                          double currentRight = rightSource + (rightTarget - rightSource) * tRight;
+
+                          // Clamping to avoid overflow on extremely small screens
+                          if (currentLeft < 0.0) {
+                            currentLeft = 0.0;
+                          }
+                          if (currentRight > totalWidth) {
+                            currentRight = totalWidth;
+                          }
+                          final double currentWidth = (currentRight - currentLeft).clamp(pillNormalWidth, totalWidth);
+
+                          double currentHeight = 48.0;
+                          if (_oldTabIndex != _currentTabIndex) {
+                            if (t < 0.3) {
+                              final double localT = t / 0.3;
+                              final double curveT = Curves.easeOut.transform(localT);
+                              currentHeight = 48.0 + (62.0 - 48.0) * curveT;
+                            } else if (t < 0.65) {
+                              final double localT = (t - 0.3) / (0.65 - 0.3);
+                              final double curveT = Curves.easeInOut.transform(localT);
+                              currentHeight = 62.0 + (40.0 - 62.0) * curveT;
+                            } else {
+                              final double localT = (t - 0.65) / (1.0 - 0.65);
+                              final double curveT = Curves.elasticOut.transform(localT);
+                              currentHeight = 40.0 + (48.0 - 40.0) * curveT;
+                            }
+                          }
+
+                          Color getIconColor(int index) {
+                            if (_oldTabIndex == _currentTabIndex) {
+                              return index == _currentTabIndex ? HestiaColors.primary : Colors.white70;
+                            }
+                            if (index == _currentTabIndex) {
+                              return Color.lerp(Colors.white70, HestiaColors.primary, t) ?? HestiaColors.primary;
+                            } else if (index == _oldTabIndex) {
+                              return Color.lerp(HestiaColors.primary, Colors.white70, t) ?? Colors.white70;
+                            } else {
+                              return Colors.white70;
+                            }
+                          }
+
+                          IconData getIconData(int index) {
+                            final bool isSelectedAtRest = _oldTabIndex == _currentTabIndex && index == _currentTabIndex;
+                            
+                            bool isEngulfed = false;
+                            if (isSelectedAtRest) {
+                              isEngulfed = true;
+                            } else if (index == _currentTabIndex) {
+                              isEngulfed = t >= 0.5;
+                            } else if (index == _oldTabIndex) {
+                              isEngulfed = t < 0.5;
+                            }
+
+                            switch (index) {
+                              case 0:
+                                return isEngulfed ? Icons.home : Icons.home_outlined;
+                              case 1:
+                                return isEngulfed ? Icons.calendar_month : Icons.calendar_month_outlined;
+                              case 2:
+                                return isEngulfed ? Icons.schedule : Icons.schedule_outlined;
+                              case 3:
+                                return isEngulfed ? Icons.person : Icons.person_outline;
+                              default:
+                                return Icons.home_outlined;
+                            }
+                          }
+
+                          Widget buildNavItemInternal(int index) {
+                            return Expanded(
+                              child: GestureDetector(
+                                onTap: () {
+                                  if (_currentTabIndex == index) return;
+                                  setState(() {
+                                    _oldTabIndex = _currentTabIndex;
+                                    _currentTabIndex = index;
+                                  });
+                                  controller.reset();
+                                  controller.forward();
+                                },
+                                behavior: HitTestBehavior.opaque,
+                                child: Container(
+                                  alignment: Alignment.center,
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  child: Icon(
+                                    getIconData(index),
+                                    color: getIconColor(index),
+                                    size: 24,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            alignment: Alignment.centerLeft,
+                            children: [
+                              // Background sliding pill
+                              Positioned(
+                                left: currentLeft,
+                                width: currentWidth,
+                                top: 0,
+                                bottom: 0,
+                                child: Align(
+                                  alignment: Alignment.center,
+                                  child: Container(
+                                    height: currentHeight,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.9),
+                                      borderRadius: BorderRadius.circular(50),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.white.withValues(alpha: 0.25),
+                                          blurRadius: 8,
+                                          spreadRadius: 1,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              // Row of items
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  buildNavItemInternal(0),
+                                  buildNavItemInternal(1),
+                                  buildNavItemInternal(2),
+                                  buildNavItemInternal(3),
+                                ],
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── Custom Illustration & Painter Widgets for Hestia Theme ──────────────
+
+class CardGridPainter extends CustomPainter {
+  final Color color;
+
+  CardGridPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+
+    final double step = 15.0;
+    
+    // Draw diagonal lines from bottom-left to top-right
+    for (double offset = -size.height; offset < size.width; offset += step) {
+      canvas.drawLine(
+        Offset(offset, size.height),
+        Offset(offset + size.height, 0),
+        paint,
+      );
+    }
+
+    // Draw diagonal lines from top-left to bottom-right (mesh effect)
+    for (double offset = -size.height; offset < size.width; offset += step) {
+      canvas.drawLine(
+        Offset(offset, 0),
+        Offset(offset + size.height, size.height),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CardGridPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
+class ClockPainter extends CustomPainter {
+  final Color primaryColor;
+
+  ClockPainter({required this.primaryColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double radius = size.width / 2;
+    final Offset center = Offset(size.width / 2, size.height / 2);
+
+    final Paint outerPaint = Paint()
+      ..color = primaryColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..strokeCap = StrokeCap.round;
+
+    final double startAngle = -pi * 0.25;
+    final double sweepAngle = pi * 1.6;
+    
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius - 3),
+      startAngle,
+      sweepAngle,
+      false,
+      outerPaint,
+    );
+
+    final double endAngle = startAngle + sweepAngle;
+    final Offset arrowTip = Offset(
+      center.dx + (radius - 3) * cos(endAngle),
+      center.dy + (radius - 3) * sin(endAngle),
+    );
+
+    final double arrowAngle = endAngle + pi / 2;
+    final double arrowSize = 6.0;
+
+    final Path arrowPath = Path()
+      ..moveTo(arrowTip.dx, arrowTip.dy)
+      ..lineTo(
+        arrowTip.dx + arrowSize * cos(arrowAngle + 2.5),
+        arrowTip.dy + arrowSize * sin(arrowAngle + 2.5),
+      )
+      ..lineTo(
+        arrowTip.dx + arrowSize * cos(arrowAngle - 2.5),
+        arrowTip.dy + arrowSize * sin(arrowAngle - 2.5),
+      )
+      ..close();
+
+    final Paint fillPaint = Paint()
+      ..color = primaryColor
+      ..style = PaintingStyle.fill;
+    
+    canvas.drawPath(arrowPath, fillPaint);
+
+    final Paint innerCirclePaint = Paint()
+      ..color = primaryColor.withValues(alpha: 0.1)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, radius - 10, innerCirclePaint);
+
+    final Paint innerBorderPaint = Paint()
+      ..color = primaryColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    canvas.drawCircle(center, radius - 10, innerBorderPaint);
+
+    final Paint handPaint = Paint()
+      ..color = primaryColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawCircle(center, 2.0, fillPaint);
+
+    canvas.drawLine(
+      center,
+      Offset(center.dx + (radius - 18) * cos(0.2), center.dy + (radius - 18) * sin(0.2)),
+      handPaint,
+    );
+
+    canvas.drawLine(
+      center,
+      Offset(center.dx + (radius - 14) * cos(-pi / 2), center.dy + (radius - 14) * sin(-pi / 2)),
+      handPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant ClockPainter oldDelegate) =>
+      oldDelegate.primaryColor != primaryColor;
+}
+
+class ClockIllustration extends StatelessWidget {
+  final Color primaryColor;
+
+  const ClockIllustration({super.key, required this.primaryColor});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 50,
+      height: 50,
+      child: CustomPaint(
+        painter: ClockPainter(primaryColor: primaryColor),
+      ),
+    );
+  }
+}
+
+class CalendarIllustration extends StatelessWidget {
+  final Color primaryColor;
+  
+  const CalendarIllustration({super.key, required this.primaryColor});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 50,
+      height: 50,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            bottom: 2,
+            child: Container(
+              width: 42,
+              height: 38,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: primaryColor, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: primaryColor.withValues(alpha: 0.15),
+                    blurRadius: 4,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Column(
+                  children: [
+                    Container(
+                      height: 8,
+                      color: primaryColor,
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: List.generate(3, (row) {
+                            return Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: List.generate(4, (col) {
+                                return Container(
+                                  width: 4,
+                                  height: 4,
+                                  decoration: BoxDecoration(
+                                    color: (row == 2 && col == 3)
+                                        ? primaryColor
+                                        : primaryColor.withValues(alpha: 0.3),
+                                    shape: BoxShape.circle,
+                                  ),
+                                );
+                              }),
+                            );
+                          }),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 2,
+            left: 10,
+            child: Container(
+              width: 4,
+              height: 10,
+              decoration: BoxDecoration(
+                color: primaryColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 2,
+            right: 10,
+            child: Container(
+              width: 4,
+              height: 10,
+              decoration: BoxDecoration(
+                color: primaryColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

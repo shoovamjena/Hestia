@@ -8,8 +8,8 @@ class HestiaColors {
   
   // Text colors
   static const Color textDark = Color(0xFF1E1E1E); // Bold titles
-  static const Color textMedium = Color(0xFF6E6E6E); // Body text
-  static const Color textLight = Color(0xFF8F8F8F); // Captions, labels
+  static const Color textMedium = Color(0xFF1E1E1E); // Body text
+  static const Color textLight = Color(0xFF1E1E1E); // Captions, labels
   static const Color textAccent = Color(0xFF704F37); // Brown highlighted text
   
   // Component colors

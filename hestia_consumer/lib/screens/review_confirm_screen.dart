@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
+import '../config/razorpay_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'home_screen.dart';
+import 'search_location_screen.dart';
 
 class ReviewConfirmScreen extends StatefulWidget {
   final String serviceTitle;
@@ -33,30 +36,136 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
   bool _isLoadingProfile = true;
   String _address = 'B-402, Koramangala';
   String _patientName = 'Aryan (Newborn)';
+  String _userName = '';
+  String _userEmail = '';
+  String _userPhone = '';
+  late Razorpay _razorpay;
 
   @override
   void initState() {
     super.initState();
     _loadProfileData();
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
+  }
+
+  @override
+  void dispose() {
+    _razorpay.clear();
+    super.dispose();
+  }
+
+  void _handlePaymentSuccess(PaymentSuccessResponse response) async {
+    // Hide the loader dialog if it is showing
+    Navigator.pop(context);
+
+    // Show a new persistent loader for supabase booking confirmation
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: CircularProgressIndicator(color: HestiaColors.primary),
+      ),
+    );
+
+    try {
+      final user = SupabaseService.currentUser;
+      final hourlyRate = _getServiceRate();
+      final durationHours = _getDurationHours();
+      final firstSessionTotal = (hourlyRate * durationHours).toInt();
+      
+      if (user != null) {
+        await SupabaseService.createBooking(
+          userId: user.id,
+          serviceTitle: widget.serviceTitle,
+          selectedDate: widget.selectedDate,
+          selectedTime: widget.selectedTime,
+          selectedDuration: widget.selectedDuration,
+          selectedProfessionalName: widget.selectedProfessionalName,
+          repeatOption: widget.repeatOption,
+          endsAfter: widget.endsAfter,
+          preferSameProfessional: widget.preferSameProfessional,
+          totalAmount: firstSessionTotal,
+          paymentId: response.paymentId,
+        );
+      }
+      if (mounted) {
+        Navigator.pop(context); // Pop the loader
+        _showBookingSuccessSheet(context, firstSessionTotal);
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Pop the loader
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to confirm booking: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  void _handlePaymentError(PaymentFailureResponse response) {
+    // Hide the loader dialog
+    Navigator.pop(context);
+    
+    // Show a premium design-aligned failure message
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Payment Failed: ${response.message ?? "User cancelled payment"}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        duration: const Duration(seconds: 4),
+      ),
+    );
+  }
+
+  void _handleExternalWallet(ExternalWalletResponse response) {
+    debugPrint('External wallet selected: ${response.walletName}');
   }
 
   Future<void> _loadProfileData() async {
     final user = SupabaseService.currentUser;
     if (user != null) {
+      _userEmail = user.email ?? '';
+      _userPhone = user.phone ?? '';
       try {
-        final data = await SupabaseService.downloadProfileJson(user.id);
-        if (data != null) {
+        final profile = await SupabaseService.getUserProfile(user.id);
+        if (profile != null) {
           setState(() {
+            _userName = profile['name'] ?? '';
+            if (profile['email'] != null && (profile['email'] as String).isNotEmpty) {
+              _userEmail = profile['email'];
+            }
+            if (profile['phone'] != null && (profile['phone'] as String).isNotEmpty) {
+              _userPhone = profile['phone'];
+            }
+            
             // Load address if available
-            if (data['address'] != null) {
-              final street = data['address']['street'] ?? '';
-              final city = data['address']['city'] ?? '';
+            if (profile['address'] != null) {
+              final street = profile['address']['street'] ?? '';
+              final city = profile['address']['city'] ?? '';
               if (street.isNotEmpty || city.isNotEmpty) {
                 _address = street.isNotEmpty ? '$street, $city' : city;
               }
             }
             // Load first household member under care
-            final members = data['household_members'] as List<dynamic>?;
+            final members = profile['household_members'] as List<dynamic>?;
             if (members != null && members.isNotEmpty) {
               final firstMember = members.first;
               final name = firstMember['name'] ?? '';
@@ -66,6 +175,32 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
               }
             }
           });
+        } else {
+          // Fallback to legacy profile json
+          final data = await SupabaseService.downloadProfileJson(user.id);
+          if (data != null) {
+            setState(() {
+              _userName = data['full_name'] ?? data['name'] ?? '';
+              // Load address if available
+              if (data['address'] != null) {
+                final street = data['address']['street'] ?? '';
+                final city = data['address']['city'] ?? '';
+                if (street.isNotEmpty || city.isNotEmpty) {
+                  _address = street.isNotEmpty ? '$street, $city' : city;
+                }
+              }
+              // Load first household member under care
+              final members = data['household_members'] as List<dynamic>?;
+              if (members != null && members.isNotEmpty) {
+                final firstMember = members.first;
+                final name = firstMember['name'] ?? '';
+                final role = firstMember['role'] ?? '';
+                if (name.isNotEmpty) {
+                  _patientName = role.isNotEmpty ? '$name ($role)' : name;
+                }
+              }
+            });
+          }
         }
       } catch (e) {
         debugPrint('Error loading profile details in ReviewConfirmScreen: $e');
@@ -254,7 +389,29 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                 Divider(color: HestiaColors.inputBorder.withValues(alpha: 0.3), height: 32, thickness: 1.2),
                                 _buildSummaryItem('Repeat', repeatLabel),
                                 Divider(color: HestiaColors.inputBorder.withValues(alpha: 0.3), height: 32, thickness: 1.2),
-                                _buildSummaryItem('Address', _address),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (context) => const SearchLocationScreen(),
+                                      ),
+                                    ).then((_) => _loadProfileData());
+                                  },
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: _buildSummaryItem('Address', _address),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(
+                                        Icons.chevron_right,
+                                        color: HestiaColors.primary,
+                                        size: 18,
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -316,7 +473,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     const Text(
-                                      'billed after session',
+                                      'payable now',
                                       style: TextStyle(
                                         fontSize: 12,
                                         color: HestiaColors.textLight,
@@ -359,10 +516,10 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Text(
-                                    'Payment collected only after session ends. Cancel free up to 2 hrs before.',
-                                    style: TextStyle(
+                                    'Pay securely now via Razorpay. Cancel free and get a full refund up to 2 hrs before.',
+                                    style: const TextStyle(
                                       fontSize: 13,
-                                      color: Colors.grey.shade600,
+                                      color: Color(0xFF1E1E1E),
                                       height: 1.4,
                                     ),
                                   ),
@@ -399,7 +556,11 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                           color: Colors.transparent,
                           child: InkWell(
                             borderRadius: BorderRadius.circular(28),
-                            onTap: () async {
+                            onTap: () {
+                              final hourlyRate = _getServiceRate();
+                              final durationHours = _getDurationHours();
+                              final firstSessionTotal = (hourlyRate * durationHours).toInt();
+
                               showDialog(
                                 context: context,
                                 barrierDismissible: false,
@@ -408,36 +569,32 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                 ),
                               );
 
+                              final options = {
+                                'key': RazorpayConfig.keyId,
+                                'amount': firstSessionTotal * 100, // in paise
+                                'name': 'Hestia',
+                                'description': 'Payment for ${widget.serviceTitle} Care Session',
+                                'timeout': 300, // 5 minutes
+                                'prefill': {
+                                  'name': _userName.isNotEmpty ? _userName : 'Guest User',
+                                  'contact': _userPhone.isNotEmpty ? _userPhone : '9876543210',
+                                  'email': _userEmail.isNotEmpty ? _userEmail : 'user@example.com',
+                                },
+                                'external': {
+                                  'wallets': ['paytm']
+                                }
+                              };
+
                               try {
-                                final user = SupabaseService.currentUser;
-                                if (user != null) {
-                                  await SupabaseService.createBooking(
-                                    userId: user.id,
-                                    serviceTitle: widget.serviceTitle,
-                                    selectedDate: widget.selectedDate,
-                                    selectedTime: widget.selectedTime,
-                                    selectedDuration: widget.selectedDuration,
-                                    selectedProfessionalName: widget.selectedProfessionalName,
-                                    repeatOption: widget.repeatOption,
-                                    endsAfter: widget.endsAfter,
-                                    preferSameProfessional: widget.preferSameProfessional,
-                                    totalAmount: firstSessionTotal,
-                                  );
-                                }
-                                if (context.mounted) {
-                                  Navigator.pop(context);
-                                  _showBookingSuccessSheet(context, firstSessionTotal);
-                                }
+                                _razorpay.open(options);
                               } catch (e) {
-                                if (context.mounted) {
-                                  Navigator.pop(context);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Failed to confirm booking: $e'),
-                                      backgroundColor: Colors.redAccent,
-                                    ),
-                                  );
-                                }
+                                Navigator.pop(context); // dismiss loader
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Could not open Razorpay checkout: $e'),
+                                    backgroundColor: Colors.redAccent,
+                                  ),
+                                );
                               }
                             },
                             child: const Center(
@@ -564,7 +721,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                     const Divider(color: Color(0xFFE5DDD5), height: 16),
                     _buildSummaryRow('Caregiver', widget.selectedProfessionalName),
                     const Divider(color: Color(0xFFE5DDD5), height: 16),
-                    _buildSummaryRow('Total Billed', '₹$total'),
+                    _buildSummaryRow('Total Paid (Razorpay)', '₹$total'),
                   ],
                 ),
               ),

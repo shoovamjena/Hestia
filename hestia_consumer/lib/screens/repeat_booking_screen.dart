@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
 import 'choose_professional_screen.dart';
+import 'time_slot_bottom_sheet.dart';
 
 class RepeatBookingScreen extends StatefulWidget {
   final String serviceTitle;
@@ -24,13 +25,27 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
   // Frequency
   String _selectedFrequency = 'Everyday';
 
+  int _getServiceRate() {
+    final title = widget.serviceTitle.toLowerCase();
+    if (title.contains('post-delivery') || title.contains('postdelivery')) return 499;
+    if (title.contains('babysitting')) return 399;
+    if (title.contains('mobility')) return 449;
+    if (title.contains('pre-pregnancy') || title.contains('prepregnancy')) return 599;
+    if (title.contains('bathing')) return 349;
+    if (title.contains('concierge')) return 299;
+    return 499; // Fallback
+  }
+
   // Duration chips
-  final List<Map<String, dynamic>> _durations = [
-    {'label': '0.5 hr', 'price': '₹99', 'value': 0.5},
-    {'label': '1 hr', 'price': '₹199', 'value': 1.0},
-    {'label': '1.5 hrs', 'price': '₹299', 'value': 1.5},
-    {'label': '2 hrs', 'price': '₹399', 'value': 2.0},
-  ];
+  List<Map<String, dynamic>> get _durations {
+    final rate = _getServiceRate();
+    return [
+      {'label': '0.5 hr', 'price': '₹${(rate * 0.5).toInt()}', 'value': 0.5},
+      {'label': '1 hr', 'price': '₹$rate', 'value': 1.0},
+      {'label': '1.5 hrs', 'price': '₹${(rate * 1.5).toInt()}', 'value': 1.5},
+      {'label': '2 hrs', 'price': '₹${(rate * 2.0).toInt()}', 'value': 2.0},
+    ];
+  }
   double _selectedDurationValue = 0.5;
 
   // Date range
@@ -46,18 +61,6 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
     return diff + 1;
   }
 
-  // Time slots
-  final List<String> _timeSlots = [
-    '7:00 AM',
-    '7:30 AM',
-    '8:00 AM',
-    '8:30 AM',
-    '9:00 AM',
-    '9:30 AM',
-    '10:00 AM',
-    '10:30 AM',
-    '11:00 AM',
-  ];
   String? _selectedTimeSlot;
 
   // Frequency options
@@ -190,6 +193,7 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
       setState(() {
         if (isStart) {
           _startDate = picked;
+          _selectedTimeSlot = null; // Reset selected time slot when start date changes
           if (_endDate.isBefore(_startDate)) {
             _endDate = _startDate.add(const Duration(days: 29));
           }
@@ -198,6 +202,28 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
         }
       });
     }
+  }
+
+  void _openTimeSlotBottomSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => TimeSlotBottomSheet(
+        initialDate: _startDate,
+        initialTimeSlot: _selectedTimeSlot,
+        onConfirm: (selectedDate, timeSlot) {
+          setState(() {
+            _startDate = selectedDate;
+            _selectedTimeSlot = timeSlot;
+            if (_endDate.isBefore(_startDate)) {
+              _endDate = _startDate.add(const Duration(days: 29));
+            }
+          });
+          Navigator.pop(context);
+        },
+      ),
+    );
   }
 
   bool get _canContinue => _selectedTimeSlot != null;
@@ -358,9 +384,9 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                                           children: [
                                             Text(
                                               'Start date',
-                                              style: TextStyle(
+                                              style: const TextStyle(
                                                 fontSize: 12,
-                                                color: Colors.grey.shade500,
+                                                color: Color(0xFF1E1E1E),
                                               ),
                                             ),
                                             const SizedBox(width: 4),
@@ -400,13 +426,13 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                                       children: [
                                         Row(
                                           children: [
-                                            Text(
-                                              'End date',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey.shade500,
-                                              ),
-                                            ),
+                                             Text(
+                                               'End date',
+                                               style: const TextStyle(
+                                                 fontSize: 12,
+                                                 color: Color(0xFF1E1E1E),
+                                               ),
+                                             ),
                                             const SizedBox(width: 4),
                                             const Icon(Icons.edit,
                                                 color: HestiaColors.primary,
@@ -442,9 +468,9 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                                     children: [
                                       Text(
                                         'Visits',
-                                        style: TextStyle(
+                                        style: const TextStyle(
                                           fontSize: 12,
-                                          color: Colors.grey.shade500,
+                                          color: Color(0xFF1E1E1E),
                                         ),
                                       ),
                                       const SizedBox(height: 6),
@@ -526,7 +552,7 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                                           fontSize: 12,
                                           color: isSelected
                                               ? HestiaColors.primary
-                                              : Colors.grey.shade500,
+                                              : const Color(0xFF1E1E1E),
                                           fontWeight: isSelected
                                               ? FontWeight.bold
                                               : FontWeight.normal,
@@ -546,90 +572,56 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                       // ── Select Time Slot ───────────────────────────
                       _sectionTitle('Select Time Slot'),
                       const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(14),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x14000000),
-                              blurRadius: 6,
-                              offset: Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Slot timings header
-                            Row(
-                              children: [
-                                Icon(Icons.timer_outlined,
-                                    color: Colors.grey.shade600, size: 20),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Slot timings',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.grey.shade700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                            GridView.builder(
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: 3,
-                                childAspectRatio: 2.6,
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
+                      GestureDetector(
+                        onTap: () => _openTimeSlotBottomSheet(context),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x14000000),
+                                blurRadius: 6,
+                                offset: Offset(0, 2),
                               ),
-                              itemCount: _timeSlots.length,
-                              itemBuilder: (context, index) {
-                                final slot = _timeSlots[index];
-                                final isSelected = slot == _selectedTimeSlot;
-                                return GestureDetector(
-                                  onTap: () {
-                                    setState(() => _selectedTimeSlot = slot);
-                                  },
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 150),
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      color: isSelected
-                                          ? HestiaColors.primary
-                                              .withValues(alpha: 0.08)
-                                          : const Color(0xFFF3F4F6),
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(
-                                        color: isSelected
-                                            ? HestiaColors.primary
-                                            : Colors.transparent,
-                                        width: 1.5,
-                                      ),
-                                    ),
-                                    child: Text(
-                                      slot,
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.timer_outlined,
+                                  color: HestiaColors.primary, size: 22),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Preferred slot',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        fontWeight: isSelected
-                                            ? FontWeight.bold
-                                            : FontWeight.normal,
-                                        color: isSelected
-                                            ? HestiaColors.primary
-                                            : Colors.grey.shade500,
+                                        color: HestiaColors.textMedium,
                                       ),
                                     ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _selectedTimeSlot ?? 'Select slot',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                        color: _selectedTimeSlot != null
+                                            ? HestiaColors.textDark
+                                            : HestiaColors.textMedium,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const Icon(Icons.chevron_right,
+                                  color: HestiaColors.primary, size: 22),
+                            ],
+                          ),
                         ),
                       ),
 
