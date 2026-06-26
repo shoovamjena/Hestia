@@ -33,6 +33,7 @@ class ChooseProfessionalScreen extends StatefulWidget {
   final String repeatOption;
   final String endsAfter;
   final bool preferSameProfessional;
+  final Map<String, int>? servicesMap;
 
   const ChooseProfessionalScreen({
     super.key,
@@ -43,6 +44,7 @@ class ChooseProfessionalScreen extends StatefulWidget {
     required this.repeatOption,
     required this.endsAfter,
     required this.preferSameProfessional,
+    this.servicesMap,
   });
 
   @override
@@ -263,6 +265,7 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                                   repeatOption: widget.repeatOption,
                                   endsAfter: widget.endsAfter,
                                   preferSameProfessional: widget.preferSameProfessional,
+                                  servicesMap: widget.servicesMap,
                                 ),
                               ),
                             );

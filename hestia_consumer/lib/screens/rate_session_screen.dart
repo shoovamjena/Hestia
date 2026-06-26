@@ -80,43 +80,55 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
 
     final dateStr = 'Today · ${formatTime(start)} – ${formatTime(end)}';
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCFCFC),
-      appBar: AppBar(
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
+        ),
+      ),
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: HestiaColors.primary.withValues(alpha: 0.15),
-                  width: 1,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: HestiaColors.primary.withValues(alpha: 0.15),
+                    width: 1,
+                  ),
                 ),
-              ),
-              child: const Icon(
-                Icons.chevron_left_rounded,
-                color: HestiaColors.primary,
-                size: 20,
+                child: const Icon(
+                  Icons.chevron_left_rounded,
+                  color: HestiaColors.primary,
+                  size: 20,
+                ),
               ),
             ),
           ),
-        ),
-        title: const Text(
-          'Rate your session',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: HestiaColors.textDark,
+          title: const Text(
+            'Rate your session',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
           ),
+          centerTitle: true,
         ),
-        centerTitle: true,
-      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -382,6 +394,7 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
           ],
         ),
       ),
+     ),
     );
   }
 

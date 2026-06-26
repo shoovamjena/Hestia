@@ -1130,7 +1130,18 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (context) => ScheduleScreen(serviceTitle: currentDetail.title),
+                      builder: (context) => ScheduleScreen(
+                        serviceTitle: currentDetail.title,
+                        initialServicesMap: Map<String, int>.from(_selectedServicesMap),
+                        onServicesChanged: (updatedMap) {
+                          setState(() {
+                            _selectedServicesMap.clear();
+                            _selectedServicesMap.addAll(updatedMap);
+                            _selectedMinutes = _selectedServicesMap[widget.serviceKey] ?? 0;
+                          });
+                          widget.onMinutesChanged?.call(_selectedMinutes);
+                        },
+                      ),
                     ),
                   );
                 },

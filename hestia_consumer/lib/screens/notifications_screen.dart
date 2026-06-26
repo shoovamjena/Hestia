@@ -14,59 +14,71 @@ class NotificationsScreen extends StatefulWidget {
 class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCFCFC),
-      appBar: AppBar(
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
+        ),
+      ),
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: HestiaColors.primary.withValues(alpha: 0.15),
-                  width: 1,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: HestiaColors.primary.withValues(alpha: 0.15),
+                    width: 1,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.chevron_left_rounded,
+                  color: HestiaColors.primary,
+                  size: 20,
                 ),
               ),
-              child: const Icon(
-                Icons.chevron_left_rounded,
-                color: HestiaColors.primary,
-                size: 20,
-              ),
             ),
           ),
-        ),
-        title: const Text(
-          'Notifications',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: HestiaColors.textDark,
-          ),
-        ),
-        centerTitle: true,
-        actions: [
-          TextButton(
-            onPressed: () {
-              NotificationsState.instance.markAllAsRead();
-              setState(() {});
-            },
-            child: const Text(
-              'Mark all read',
-              style: TextStyle(
-                color: HestiaColors.primary,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
+          title: const Text(
+            'Notifications',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
             ),
           ),
-        ],
-      ),
+          centerTitle: true,
+          actions: [
+            TextButton(
+              onPressed: () {
+                NotificationsState.instance.markAllAsRead();
+                setState(() {});
+              },
+              child: const Text(
+                'Mark all read',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
       body: SafeArea(
         child: AnimatedBuilder(
           animation: NotificationsState.instance,
@@ -133,6 +145,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           },
         ),
       ),
+     ),
     );
   }
 
@@ -249,6 +262,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           if (item.title.contains('Rate your session')) {
             final mockSession = {
               'booking_id': 'mock-session-1',
+              'session_id': 'mock-session-1',
               'title': 'Post-Delivery',
               'scheduled_start': DateTime.now().subtract(const Duration(hours: 3, minutes: 2)),
               'duration_hours': 3.033,
@@ -266,10 +280,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           } else if (item.title.contains('started') || item.title.contains('on the way')) {
             final mockBooking = {
               'id': 'booking_123',
+              'booking_id': 'mock-booking-active-1',
               'title': 'Post-Delivery',
               'caregiver_name': 'Sunita Rao',
               'scheduled_start': DateTime.now().subtract(const Duration(hours: 1, minutes: 24)),
               'duration_hours': 3,
+              'status': 'transit',
             };
             
             Navigator.of(context).push(

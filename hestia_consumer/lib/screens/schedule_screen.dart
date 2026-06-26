@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
+import '../services/supabase_service.dart';
 import 'choose_professional_screen.dart';
 import 'repeat_booking_screen.dart';
+import 'search_location_screen.dart';
 import 'service_detail_screen.dart';
 import 'time_slot_bottom_sheet.dart';
 
@@ -28,6 +30,12 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   DateTime? _scheduledDate;
   String? _scheduledTimeSlot;
 
+  // Address and contact state
+  String _addressText = '89, Usuw, Pocket 25, Pocket 25, Bharat singh, Pista, New Delhi, Delhi, India, 110085';
+  String _phone = '+91 8144684265';
+  String _userName = 'Soumya';
+  bool _isLoadingAddress = false;
+
   @override
   void initState() {
     super.initState();
@@ -36,6 +44,55 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       _servicesMap = Map<String, int>.from(widget.initialServicesMap!);
     } else {
       _servicesMap = {widget.serviceTitle: 30};
+    }
+    _loadAddress();
+  }
+
+  Future<void> _loadAddress() async {
+    final user = SupabaseService.currentUser;
+    if (user != null) {
+      setState(() {
+        _isLoadingAddress = true;
+      });
+      try {
+        Map<String, dynamic>? data = await SupabaseService.getUserProfile(user.id);
+        if (data == null || data['address'] == null) {
+          data = await SupabaseService.downloadProfileJson(user.id);
+        }
+        final profileData = data;
+        if (profileData != null) {
+          setState(() {
+            _userName = profileData['name'] ?? profileData['full_name'] ?? 'Soumya';
+            _phone = profileData['phone'] ?? user.phone ?? user.userMetadata?['phone'] ?? '+91 8144684265';
+            
+            if (profileData['address'] != null) {
+              final Map<String, dynamic> address = Map<String, dynamic>.from(profileData['address']);
+              final flat = address['flat'] ?? '';
+              final street = address['street'] ?? '';
+              final city = address['city'] ?? '';
+              final pin = address['pincode'] ?? address['pin_code'] ?? '';
+              
+              if (flat.toString().isNotEmpty || street.toString().isNotEmpty || city.toString().isNotEmpty || pin.toString().isNotEmpty) {
+                List<String> parts = [];
+                if (flat.toString().isNotEmpty) parts.add(flat);
+                if (street.toString().isNotEmpty) parts.add(street);
+                if (city.toString().isNotEmpty) parts.add(city);
+                parts.add("India");
+                if (pin.toString().isNotEmpty) parts.add(pin);
+                _addressText = parts.join(", ");
+              }
+            }
+          });
+        }
+      } catch (e) {
+        debugPrint('Error loading address in ScheduleScreen: $e');
+      } finally {
+        setState(() {
+          if (mounted) {
+            _isLoadingAddress = false;
+          }
+        });
+      }
     }
   }
 
@@ -661,6 +718,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
                       // Location & Contact Details card
                       Container(
+                        clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
                           color: Colors.white,
                           borderRadius: BorderRadius.circular(16),
@@ -728,40 +786,64 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                               Divider(height: 1, color: Colors.grey.withValues(alpha: 0.15)),
                             ],
                             // Location card item
-                            Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.location_on_outlined, color: HestiaColors.primary, size: 22),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: const [
-                                        Text(
-                                          'Location',
-                                          style: TextStyle(
-                                            fontSize: 13.5,
-                                            fontWeight: FontWeight.bold,
-                                            color: HestiaColors.textDark,
-                                          ),
-                                        ),
-                                        SizedBox(height: 2),
-                                        Text(
-                                          '89, Usuw, Pocket 25, Pocket 25, Bharat singh, Pista, New Delhi, Delhi, India, 11...',
-                                          style: TextStyle(
-                                            fontSize: 11.5,
-                                            color: HestiaColors.textMedium,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ],
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (context) => const SearchLocationScreen(),
                                     ),
+                                  ).then((_) => _loadAddress());
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16.0),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.location_on_outlined, color: HestiaColors.primary, size: 22),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            const Text(
+                                              'Location',
+                                              style: TextStyle(
+                                                fontSize: 13.5,
+                                                fontWeight: FontWeight.bold,
+                                                color: HestiaColors.textDark,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              _isLoadingAddress ? 'Loading address...' : _addressText,
+                                              style: const TextStyle(
+                                                fontSize: 11.5,
+                                                color: HestiaColors.textMedium,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: BoxDecoration(
+                                          color: HestiaColors.primary.withValues(alpha: 0.08),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          Icons.chevron_right_rounded,
+                                          color: HestiaColors.primary,
+                                          size: 20,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(width: 8),
-                                  Icon(Icons.chevron_right, color: Colors.grey.shade400, size: 20),
-                                ],
+                                ),
                               ),
                             ),
                             Divider(height: 1, color: Colors.grey.withValues(alpha: 0.15)),
@@ -775,19 +857,19 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: const [
+                                      children: [
                                         Text(
-                                          'Soumya',
-                                          style: TextStyle(
+                                          _userName,
+                                          style: const TextStyle(
                                             fontSize: 13.5,
                                             fontWeight: FontWeight.bold,
                                             color: HestiaColors.textDark,
                                           ),
                                         ),
-                                        SizedBox(height: 2),
+                                        const SizedBox(height: 2),
                                         Text(
-                                          '+91 8144684265',
-                                          style: TextStyle(
+                                          _phone,
+                                          style: const TextStyle(
                                             fontSize: 11.5,
                                             color: HestiaColors.textMedium,
                                           ),
@@ -971,6 +1053,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                       child: InkWell(
                         borderRadius: BorderRadius.circular(14),
                         onTap: () {
+                          if (!SupabaseService.isPhoneVerified()) {
+                            _showPhoneVerificationPopup(context);
+                            return;
+                          }
                           if (_activeTab == 'Recurring') {
                             final firstService = _servicesMap.keys.isNotEmpty ? _servicesMap.keys.first : widget.serviceTitle;
                             final matchedTitle = _getDetail(firstService)?.title ?? widget.serviceTitle;
@@ -1000,6 +1086,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                     repeatOption: 'Once',
                                     endsAfter: '1 session',
                                     preferSameProfessional: false,
+                                    servicesMap: _servicesMap,
                                   ),
                                 ),
                               );
@@ -1058,6 +1145,85 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  void _showPhoneVerificationPopup(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: HestiaColors.background,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: Row(
+            children: const [
+              Icon(Icons.warning_amber_rounded, color: Color(0xFFC0392B), size: 28),
+              SizedBox(width: 10),
+              Text(
+                'Verify Mobile Number',
+                style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark, fontSize: 18),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'To continue and complete your booking, please verify your mobile number. This is required for secure communication with care professionals.',
+                style: TextStyle(fontSize: 14.5, color: HestiaColors.textMedium, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, color: Colors.orangeAccent, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'You can complete verification in the Profile screen.',
+                        style: TextStyle(color: Colors.orange.shade900, fontSize: 12.5, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: HestiaColors.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                elevation: 0,
+              ),
+              onPressed: () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please navigate to the Profile screen to verify your number.'),
+                    backgroundColor: HestiaColors.primary,
+                  ),
+                );
+              },
+              child: const Text('Verify Now', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
     );
   }
 }

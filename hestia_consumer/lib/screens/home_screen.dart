@@ -40,6 +40,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   AnimationController? _navAnimationController;
   String _selectedSessionCategory = 'All';
   String _sessionSearchQuery = '';
+  List<Map<String, dynamic>> _upcomingBookings = [];
+  int _bookingsSubTab = 0; // 0 for Upcoming, 1 for History
 
   void _initAnimationController() {
     _navAnimationController ??= AnimationController(
@@ -122,6 +124,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         });
       } catch (e) {
         debugPrint('Error loading recent sessions: $e');
+      }
+
+      // 5. Fetch upcoming bookings dynamically from database
+      try {
+        final upcoming = await SupabaseService.getUpcomingBookings(user.id);
+        setState(() {
+          _upcomingBookings = upcoming;
+        });
+      } catch (e) {
+        debugPrint('Error loading upcoming bookings: $e');
       }
     }
     setState(() {
@@ -724,7 +736,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _buildPlaceholderTab(String title, IconData icon) {
+  Widget _buildBookingsTab() {
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -737,56 +749,361 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ],
         ),
       ),
-      child: SafeArea(
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          automaticallyImplyLeading: false,
+          title: const Text(
+            'My Bookings',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+          centerTitle: true,
+        ),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Segmented Control Toggle
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+              child: Container(
+                height: 44,
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: HestiaColors.primary.withValues(alpha: 0.2),
-                      blurRadius: 15,
-                      offset: const Offset(0, 5),
+                  color: Colors.white.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _bookingsSubTab = 0;
+                          });
+                        },
+                        behavior: HitTestBehavior.opaque,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: _bookingsSubTab == 0 ? Colors.white : Colors.transparent,
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'Upcoming',
+                            style: TextStyle(
+                              color: _bookingsSubTab == 0 ? HestiaColors.primary : Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _bookingsSubTab = 1;
+                          });
+                        },
+                        behavior: HitTestBehavior.opaque,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: _bookingsSubTab == 1 ? Colors.white : Colors.transparent,
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'History',
+                            style: TextStyle(
+                              color: _bookingsSubTab == 1 ? HestiaColors.primary : Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
-                child: Icon(
-                  icon,
-                  color: HestiaColors.primary,
-                  size: 36,
-                ),
               ),
-              const SizedBox(height: 20),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Coming soon in the next update!',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: HestiaColors.textMedium,
-                ),
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 8),
+            // Expanded content based on selected segment
+            Expanded(
+              child: _bookingsSubTab == 0
+                  ? _buildUpcomingView()
+                  : _buildHistoryView(),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildRecentSessionsTab() {
+  Widget _buildUpcomingView() {
+    if (_upcomingBookings.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: HestiaColors.primary.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.calendar_today_rounded,
+                color: HestiaColors.primary,
+                size: 32,
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'No upcoming bookings',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: HestiaColors.textDark,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Book a care visit from the Home screen.',
+              style: TextStyle(
+                fontSize: 13,
+                color: HestiaColors.textMedium,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadProfileData,
+      color: HestiaColors.primary,
+      child: ListView.separated(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 120), // padded to avoid floating navbar
+        itemCount: _upcomingBookings.length,
+        separatorBuilder: (context, index) => const SizedBox(height: 14),
+        itemBuilder: (context, index) {
+          final booking = _upcomingBookings[index];
+          return _buildUpcomingCard(booking);
+        },
+      ),
+    );
+  }
+
+  Widget _buildUpcomingCard(Map<String, dynamic> booking) {
+    final caregiverName = booking['caregiver_name'] ?? 'Sunita Rao';
+    final title = booking['title'] ?? 'Post-Delivery';
+    final displayTitle = title.endsWith('Care') ? title : '$title Care';
+    final status = booking['status'] as String? ?? 'pending';
+    final start = booking['scheduled_start'] as DateTime;
+    final totalAmount = booking['amount'] != null ? (booking['amount'] as num).toInt() : 0;
+    
+    // Check if date is today/tomorrow
+    final now = DateTime.now();
+    final isToday = start.year == now.year && start.month == now.month && start.day == now.day;
+    final tomorrow = now.add(const Duration(days: 1));
+    final isTomorrow = start.year == tomorrow.year && start.month == tomorrow.month && start.day == tomorrow.day;
+    
+    final String dateStr = isToday
+        ? 'Today'
+        : isTomorrow
+            ? 'Tomorrow'
+            : _formatBookingDate(start);
+    final String timeStr = _formatBookingTime(start);
+
+    // Icon & Color based on Service Pillar
+    IconData cardIcon;
+    Color iconColor;
+    Color iconBgColor;
+
+    if (title.toLowerCase().contains('delivery') || title.toLowerCase().contains('hospital')) {
+      cardIcon = Icons.favorite_rounded;
+      iconColor = const Color(0xFFC39365);
+      iconBgColor = const Color(0xFFFAF2EB);
+    } else if (title.toLowerCase().contains('mobility')) {
+      cardIcon = Icons.accessibility_new_rounded;
+      iconColor = const Color(0xFF1E88E5);
+      iconBgColor = const Color(0xFFE3F2FD);
+    } else {
+      cardIcon = Icons.child_care_rounded;
+      iconColor = const Color(0xFF2E7D32);
+      iconBgColor = const Color(0xFFE8F5E9);
+    }
+
+    // Status styling
+    Color statusBgColor;
+    Color statusTextColor;
+    String statusLabel = status.toUpperCase();
+
+    if (status == 'active') {
+      statusBgColor = const Color(0xFFE8F5ED);
+      statusTextColor = const Color(0xFF2E6B4A);
+      statusLabel = 'ACTIVE NOW';
+    } else if (status == 'confirmed') {
+      statusBgColor = const Color(0xFFE3F2FD);
+      statusTextColor = const Color(0xFF1E88E5);
+      statusLabel = 'CONFIRMED';
+    } else {
+      statusBgColor = const Color(0xFFFFF3E0);
+      statusTextColor = const Color(0xFFE65100);
+      statusLabel = 'PENDING';
+    }
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => TrackingScreen(bookingData: booking),
+          ),
+        ).then((_) => _loadProfileData());
+      },
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: const Color(0xFF8C6239).withValues(alpha: 0.18),
+            width: 3.0,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Icon
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: iconBgColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(cardIcon, color: iconColor, size: 20),
+                ),
+                const SizedBox(width: 14),
+                // Text details
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              displayTitle,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: HestiaColors.textDark,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: statusBgColor,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              statusLabel,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: statusTextColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$dateStr at $timeStr',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: HestiaColors.textDark,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Caregiver: $caregiverName',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: HestiaColors.textMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Divider(color: Color(0xFFF5EBE0), height: 1, thickness: 1.2),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Amount: ₹$totalAmount',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: HestiaColors.textDark,
+                  ),
+                ),
+                Row(
+                  children: [
+                    Text(
+                      status == 'active' ? 'Track Care' : 'View Details',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: HestiaColors.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: HestiaColors.primary,
+                      size: 16,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistoryView() {
     final filteredSessions = _recentSessions.where((session) {
       final title = session['title'] as String? ?? '';
       final caregiver = session['caregiver_name'] as String? ?? '';
@@ -797,109 +1114,96 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       return matchesQuery && matchesCat;
     }).toList();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCFCFC),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        automaticallyImplyLeading: false,
-        title: const Text(
-          'Sessions',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: HestiaColors.textDark,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Search Bar
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+          child: Container(
+            height: 48,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white24),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Icon(Icons.search, color: Colors.white70, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    onChanged: (val) {
+                      setState(() {
+                        _sessionSearchQuery = val.toLowerCase();
+                      });
+                    },
+                    style: const TextStyle(fontSize: 14, color: Colors.white),
+                    decoration: const InputDecoration(
+                      hintText: 'Search sessions',
+                      hintStyle: TextStyle(color: Colors.white70, fontSize: 14),
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.symmetric(vertical: 2.0),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-        centerTitle: true,
-      ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Search Bar
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-            child: Container(
-              height: 48,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF5EDE4).withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(24),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  const Icon(Icons.search, color: HestiaColors.textLight, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      onChanged: (val) {
-                        setState(() {
-                          _sessionSearchQuery = val.toLowerCase();
-                        });
-                      },
-                      style: const TextStyle(fontSize: 14, color: HestiaColors.textDark),
-                      decoration: const InputDecoration(
-                        hintText: 'Search sessions',
-                        hintStyle: TextStyle(color: HestiaColors.textLight, fontSize: 14),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(vertical: 2.0),
+
+        const SizedBox(height: 12),
+
+        // Horizontal Categories filter
+        SizedBox(
+          height: 38,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            children: ['All', 'Post-Delivery', 'Mobility', 'Babysitting'].map((cat) {
+              final isSelected = _selectedSessionCategory == cat;
+              return GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _selectedSessionCategory = cat;
+                  });
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(right: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.2),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      cat,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: isSelected ? HestiaColors.primary : Colors.white,
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            }).toList(),
           ),
-          
-          const SizedBox(height: 12),
+        ),
 
-          // Horizontal Categories filter
-          SizedBox(
-            height: 38,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 24.0),
-              children: ['All', 'Post-Delivery', 'Mobility', 'Babysitting'].map((cat) {
-                final isSelected = _selectedSessionCategory == cat;
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _selectedSessionCategory = cat;
-                    });
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isSelected ? const Color(0xFF8C6239) : Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                        color: isSelected ? const Color(0xFF8C6239) : const Color(0xFFE5D5C5),
-                        width: 1.2,
-                      ),
-                    ),
-                    child: Center(
-                      child: Text(
-                        cat,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: isSelected ? Colors.white : HestiaColors.textMedium,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
+        const SizedBox(height: 20),
 
-          const SizedBox(height: 20),
-
-          // Sessions Card List
-          Expanded(
+        // Sessions Card List
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _loadProfileData,
+            color: HestiaColors.primary,
             child: filteredSessions.isNotEmpty
                 ? ListView.separated(
                     physics: const BouncingScrollPhysics(),
@@ -913,8 +1217,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   )
                 : _buildNoSessionsState(),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1020,12 +1324,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFF5EBE0), width: 1.2),
-          boxShadow: const [
+          border: Border.all(
+            color: const Color(0xFF8C6239).withValues(alpha: 0.18),
+            width: 3.0,
+          ),
+          boxShadow: [
             BoxShadow(
-              color: Color(0x03000000),
-              blurRadius: 10,
-              offset: Offset(0, 4),
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
@@ -1367,11 +1674,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       case 0:
         return _buildHomeTab();
       case 1:
-        return _buildPlaceholderTab('My Bookings', Icons.calendar_month);
+        return _buildBookingsTab();
       case 2:
-        return _buildRecentSessionsTab();
-      case 3:
-        return _buildPlaceholderTab('My Profile', Icons.person);
+        return const ProfileScreen(showBackButton: false);
       default:
         return _buildHomeTab();
     }
@@ -2213,7 +2518,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     // Go to Cart button
                     GestureDetector(
                       onTap: () {
-                        // TODO: navigate to cart screen
+                        if (_serviceMinutes.isNotEmpty) {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => ScheduleScreen(
+                                serviceTitle: _serviceMinutes.keys.first,
+                                initialServicesMap: Map<String, int>.from(_serviceMinutes),
+                                onServicesChanged: (updatedMap) {
+                                  setState(() {
+                                    _serviceMinutes.clear();
+                                    _serviceMinutes.addAll(updatedMap);
+                                  });
+                                },
+                              ),
+                            ),
+                          );
+                        }
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(
@@ -2255,53 +2575,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       bottomNavigationBar: SafeArea(
         top: false,
         child: Container(
-          margin: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(32),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.25),
-              width: 1.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.25),
-                blurRadius: 15,
-                spreadRadius: 1,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
+          margin: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+          
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(32),
+            borderRadius: BorderRadius.circular(50),
             child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18.0, sigmaY: 18.0),
+              filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
               child: Container(
                 padding: const EdgeInsets.symmetric(
-                  vertical: 16,
-                  horizontal: 4,
+                  vertical: 4,
+                  horizontal: 0,
                 ),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      HestiaColors.primary.withValues(alpha: 0.55),
-                      HestiaColors.primary.withValues(alpha: 0.35),
-                    ],
-                  ),
+                  color: HestiaColors.primary.withValues(alpha: 0.3),
                 ),
                 child: SizedBox(
-                  height: 48,
+                  height: 66,
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final double totalWidth = constraints.maxWidth;
-                      final double tabWidth = totalWidth / 4;
+                      final double tabWidth = totalWidth / 3;
 
                       return AnimatedBuilder(
                         animation: controller,
                         builder: (context, child) {
                           final double t = controller.value;
-                          final double pillNormalWidth = 72.0;
+                          final double pillNormalWidth = tabWidth - 8;
 
                           final double centerSource = (_oldTabIndex + 0.5) * tabWidth;
                           final double centerTarget = (_currentTabIndex + 0.5) * tabWidth;
@@ -2337,33 +2636,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           }
                           final double currentWidth = (currentRight - currentLeft).clamp(pillNormalWidth, totalWidth);
 
-                          double currentHeight = 48.0;
-                          if (_oldTabIndex != _currentTabIndex) {
-                            if (t < 0.3) {
-                              final double localT = t / 0.3;
-                              final double curveT = Curves.easeOut.transform(localT);
-                              currentHeight = 48.0 + (62.0 - 48.0) * curveT;
-                            } else if (t < 0.65) {
-                              final double localT = (t - 0.3) / (0.65 - 0.3);
-                              final double curveT = Curves.easeInOut.transform(localT);
-                              currentHeight = 62.0 + (40.0 - 62.0) * curveT;
+                          Color getNavItemColor(int index) {
+                            final Color activeColor = HestiaColors.primary;
+                            final Color inactiveColor = Colors.brown.withValues(alpha: 0.5);
+                            if (_oldTabIndex == _currentTabIndex) {
+                              return index == _currentTabIndex ? activeColor : inactiveColor;
+                            }
+                            if (index == _currentTabIndex) {
+                              return Color.lerp(inactiveColor, activeColor, t) ?? activeColor;
+                            } else if (index == _oldTabIndex) {
+                              return Color.lerp(activeColor, inactiveColor, t) ?? inactiveColor;
                             } else {
-                              final double localT = (t - 0.65) / (1.0 - 0.65);
-                              final double curveT = Curves.elasticOut.transform(localT);
-                              currentHeight = 40.0 + (48.0 - 40.0) * curveT;
+                              return inactiveColor;
                             }
                           }
 
-                          Color getIconColor(int index) {
-                            if (_oldTabIndex == _currentTabIndex) {
-                              return index == _currentTabIndex ? HestiaColors.primary : Colors.white70;
-                            }
-                            if (index == _currentTabIndex) {
-                              return Color.lerp(Colors.white70, HestiaColors.primary, t) ?? HestiaColors.primary;
-                            } else if (index == _oldTabIndex) {
-                              return Color.lerp(HestiaColors.primary, Colors.white70, t) ?? Colors.white70;
-                            } else {
-                              return Colors.white70;
+                          String getTabLabel(int index) {
+                            switch (index) {
+                              case 0:
+                                return 'Home';
+                              case 1:
+                                return 'Bookings';
+                              case 2:
+                                return 'Profile';
+                              default:
+                                return '';
                             }
                           }
 
@@ -2385,8 +2682,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               case 1:
                                 return isEngulfed ? Icons.calendar_month : Icons.calendar_month_outlined;
                               case 2:
-                                return isEngulfed ? Icons.schedule : Icons.schedule_outlined;
-                              case 3:
                                 return isEngulfed ? Icons.person : Icons.person_outline;
                               default:
                                 return Icons.home_outlined;
@@ -2394,6 +2689,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           }
 
                           Widget buildNavItemInternal(int index) {
+                            final Color color = getNavItemColor(index);
                             return Expanded(
                               child: GestureDetector(
                                 onTap: () {
@@ -2408,11 +2704,26 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 behavior: HitTestBehavior.opaque,
                                 child: Container(
                                   alignment: Alignment.center,
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                  child: Icon(
-                                    getIconData(index),
-                                    color: getIconColor(index),
-                                    size: 24,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        getIconData(index),
+                                        color: color,
+                                        size: 22,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        getTabLabel(index),
+                                        style: TextStyle(
+                                          color: color,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: 0.2,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -2432,17 +2743,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 child: Align(
                                   alignment: Alignment.center,
                                   child: Container(
-                                    height: currentHeight,
+                                    width: currentWidth,
+                                    height: 66.0,
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.9),
+                                      color: Colors.white.withValues(alpha: 0.25),
                                       borderRadius: BorderRadius.circular(50),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.white.withValues(alpha: 0.25),
-                                          blurRadius: 8,
-                                          spreadRadius: 1,
-                                        ),
-                                      ],
+                                      border: Border.all(
+                                        color: Colors.white.withValues(alpha: 1),
+                                        width: 1.5,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -2455,7 +2764,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   buildNavItemInternal(0),
                                   buildNavItemInternal(1),
                                   buildNavItemInternal(2),
-                                  buildNavItemInternal(3),
                                 ],
                               ),
                             ],

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
+import '../services/supabase_service.dart';
 import 'activity_log_screen.dart';
 import 'session_complete_screen.dart';
 import 'chat_screen.dart';
@@ -16,27 +17,63 @@ class TrackingScreen extends StatefulWidget {
 }
 
 class _TrackingScreenState extends State<TrackingScreen> {
+  late Map<String, dynamic> _bookingData;
   bool _isOnTheWayView = true;
   late Timer _stopwatchTimer;
+  Timer? _statusTimer;
   int _secondsElapsed = 5047; // starts around 01:24:07
+  bool _isShowingVerificationDialog = false;
 
   @override
   void initState() {
     super.initState();
+    _bookingData = Map<String, dynamic>.from(widget.bookingData);
+    final status = _bookingData['status'];
+    _isOnTheWayView = !(status == 'started' || status == 'active' || status == 'in_progress');
     _startStopwatch();
+    _startStatusPolling();
   }
 
   @override
   void dispose() {
     _stopwatchTimer.cancel();
+    _statusTimer?.cancel();
     super.dispose();
+  }
+
+  void _startStatusPolling() {
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      final bookingId = _bookingData['booking_id'];
+      if (bookingId != null) {
+        final updated = await SupabaseService.getBookingStatus(bookingId.toString());
+        if (updated != null && mounted) {
+          setState(() {
+            _bookingData = updated;
+            final status = _bookingData['status'];
+            final isSessionActive = (status == 'started' || status == 'active' || status == 'in_progress');
+            if (isSessionActive) {
+              _isOnTheWayView = false;
+            } else {
+              _isOnTheWayView = true;
+            }
+          });
+          _checkArrivalRequest(updated);
+        }
+      }
+    });
   }
 
   void _startStopwatch() {
     _stopwatchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
-          _secondsElapsed++;
+          final actualStart = _bookingData['actual_start'];
+          if (actualStart != null) {
+            final startTime = actualStart is DateTime ? actualStart : DateTime.parse(actualStart.toString());
+            _secondsElapsed = DateTime.now().difference(startTime).inSeconds;
+          } else {
+            _secondsElapsed++;
+          }
         });
       }
     });
@@ -49,162 +86,317 @@ class _TrackingScreenState extends State<TrackingScreen> {
     return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCFCFC),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: HestiaColors.primary.withValues(alpha: 0.15),
-                  width: 1,
+  void _checkArrivalRequest(Map<String, dynamic> bookingData) {
+    if (bookingData['arrival_requested'] == true && !_isShowingVerificationDialog) {
+      _showArrivalVerificationDialog(bookingData);
+    }
+  }
+
+  void _showArrivalVerificationDialog(Map<String, dynamic> bookingData) {
+    _isShowingVerificationDialog = true;
+    final bookingId = bookingData['booking_id'] as String;
+    final caregiverName = bookingData['caregiver_name'] ?? 'Sunita Rao';
+    
+    // Generate deterministic 6-character code from booking ID
+    final code = _generateVerificationCode(bookingId);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: const Color(0xFFFAF6F0),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.verified_user_rounded,
+                color: HestiaColors.primary,
+                size: 28,
+              ),
+              SizedBox(width: 10),
+              Text(
+                'Start Session?',
+                style: TextStyle(
+                  color: HestiaColors.textDark,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
                 ),
               ),
-              child: const Icon(
-                Icons.chevron_left_rounded,
-                color: HestiaColors.primary,
-                size: 20,
-              ),
-            ),
+            ],
           ),
-        ),
-        title: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: HestiaColors.primary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
+          content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              GestureDetector(
-                onTap: () => setState(() => _isOnTheWayView = true),
+              Text(
+                '$caregiverName has arrived and is ready to start your session.',
+                style: const TextStyle(
+                  color: HestiaColors.textDark,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Please verify the 6-digit alphanumeric code shown below with the caregiver before starting:',
+                style: TextStyle(
+                  color: HestiaColors.textMedium,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Center(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   decoration: BoxDecoration(
-                    color: _isOnTheWayView ? HestiaColors.primary : Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    'On the Way',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: _isOnTheWayView ? Colors.white : HestiaColors.textMedium,
+                    color: HestiaColors.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: HestiaColors.primary.withValues(alpha: 0.3),
+                      width: 1.5,
                     ),
                   ),
-                ),
-              ),
-              GestureDetector(
-                onTap: () => setState(() => _isOnTheWayView = false),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: !_isOnTheWayView ? HestiaColors.primary : Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
                   child: Text(
-                    'Active Session',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: !_isOnTheWayView ? Colors.white : HestiaColors.textMedium,
+                    code,
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
+                      color: HestiaColors.primary,
+                      letterSpacing: 4.0,
                     ),
                   ),
                 ),
               ),
             ],
           ),
-        ),
-        centerTitle: true,
-        actions: [
-          if (!_isOnTheWayView)
-            Padding(
-              padding: const EdgeInsets.only(right: 16.0),
-              child: GestureDetector(
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => const ChatScreen(
-                        caregiverName: 'Sunita Rao',
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      setState(() {
+                        _isShowingVerificationDialog = false;
+                      });
+                    },
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: HestiaColors.primary.withValues(alpha: 0.3)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: HestiaColors.textMedium,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                  );
-                },
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: HestiaColors.primary.withValues(alpha: 0.15),
-                      width: 1,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      Navigator.of(context).pop();
+                      setState(() {
+                        _isShowingVerificationDialog = false;
+                      });
+                      
+                      // Actually start the session now
+                      await SupabaseService.startMockSession(bookingId);
+                      
+                      // Immediately refresh state
+                      final updated = await SupabaseService.getBookingStatus(bookingId);
+                      if (updated != null && mounted) {
+                        setState(() {
+                          _bookingData = updated;
+                          _isOnTheWayView = false;
+                        });
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: HestiaColors.primary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text(
+                      'Confirm & Start',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                  child: const Icon(
-                    Icons.chat_bubble_outline_rounded,
-                    color: HestiaColors.primary,
-                    size: 18,
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  String _generateVerificationCode(String id) {
+    final cleaned = id.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase();
+    if (cleaned.length >= 6) {
+      return cleaned.substring(0, 6);
+    }
+    return '${cleaned}HESTIA'.substring(0, 6);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
+        ),
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: HestiaColors.primary.withValues(alpha: 0.15),
+                    width: 1,
                   ),
+                ),
+                child: const Icon(
+                  Icons.chevron_left_rounded,
+                  color: HestiaColors.primary,
+                  size: 20,
                 ),
               ),
             ),
-        ],
-      ),
-      body: SafeArea(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 300),
-          child: _isOnTheWayView ? _buildOnTheWayView() : _buildActiveSessionView(),
-        ),
-      ),
-      bottomNavigationBar: !_isOnTheWayView
-          ? SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFC0392B),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(28),
+          ),
+          title: () {
+            final status = _bookingData['status'];
+            final isSessionActive = (status == 'started' || status == 'active' || status == 'in_progress');
+            if (!isSessionActive) {
+              return const Text(
+                'On the Way',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              );
+            }
+            return const Text(
+              'Active Session',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            );
+          }(),
+          centerTitle: true,
+          actions: [
+            if (!_isOnTheWayView)
+              Padding(
+                padding: const EdgeInsets.only(right: 16.0),
+                child: GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => const ChatScreen(
+                          caregiverName: 'Sunita Rao',
+                        ),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: HestiaColors.primary.withValues(alpha: 0.15),
+                        width: 1,
                       ),
                     ),
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => EmergencyScreen(
-                            bookingData: widget.bookingData,
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text(
-                      'Emergency — Contact Dispatch',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.3,
-                      ),
+                    child: const Icon(
+                      Icons.chat_bubble_outline_rounded,
+                      color: HestiaColors.primary,
+                      size: 18,
                     ),
                   ),
                 ),
               ),
-            )
-          : null,
+          ],
+        ),
+        body: SafeArea(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            child: _isOnTheWayView ? _buildOnTheWayView() : _buildActiveSessionView(),
+          ),
+        ),
+        bottomNavigationBar: !_isOnTheWayView
+            ? SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 56,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFC0392B),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(28),
+                        ),
+                      ),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => EmergencyScreen(
+                              bookingData: _bookingData,
+                            ),
+                          ),
+                        );
+                      },
+                      child: const Text(
+                        'Emergency — Contact Dispatch',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            : null,
+      ),
     );
   }
 
@@ -222,7 +414,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w900,
-                color: HestiaColors.textDark,
+                color: Colors.white,
                 letterSpacing: 0.2,
               ),
             ),
@@ -495,6 +687,65 @@ class _TrackingScreenState extends State<TrackingScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 16),
+          GestureDetector(
+            onTap: () async {
+              final bookingId = _bookingData['booking_id'];
+              if (bookingId != null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Simulating professional arrival...'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+                
+                await SupabaseService.requestSessionStart(bookingId.toString());
+                
+                // Immediately refresh status
+                final updated = await SupabaseService.getBookingStatus(bookingId.toString());
+                if (updated != null && mounted) {
+                  setState(() {
+                    _bookingData = updated;
+                  });
+                  _checkArrivalRequest(updated);
+                }
+              }
+            },
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF2ECC71), Color(0xFF27AE60)],
+                ),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x262ECC71),
+                    blurRadius: 8,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: const Center(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.play_arrow_rounded, color: Colors.white),
+                    SizedBox(width: 8),
+                    Text(
+                      'Simulate Professional Arrival',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -514,7 +765,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
               style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w900,
-                color: HestiaColors.textDark,
+                color: Colors.white,
                 letterSpacing: 0.2,
               ),
             ),
@@ -636,11 +887,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
           const SizedBox(height: 24),
           // Activity log header
           GestureDetector(
-            onTap: () {
+             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ActivityLogScreen(
-                    bookingData: widget.bookingData,
+                    bookingData: _bookingData,
                   ),
                 ),
               );
@@ -776,7 +1027,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (context) => SessionCompleteScreen(
-                      bookingData: widget.bookingData,
+                      bookingData: _bookingData,
                     ),
                   ),
                 );

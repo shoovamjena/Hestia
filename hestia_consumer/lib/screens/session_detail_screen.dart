@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
+import '../services/supabase_service.dart';
 import 'receipt_screen.dart';
 import 'rate_session_screen.dart';
 
@@ -13,11 +14,37 @@ class SessionDetailScreen extends StatefulWidget {
 
 class _SessionDetailScreenState extends State<SessionDetailScreen> {
   late Map<String, dynamic> _session;
+  List<Map<String, dynamic>> _activityLog = [];
+  bool _isLoadingLogs = true;
 
   @override
   void initState() {
     super.initState();
     _session = Map<String, dynamic>.from(widget.sessionData);
+    _loadActivityLogs();
+  }
+
+  Future<void> _loadActivityLogs() async {
+    final sessionId = _session['session_id'];
+    if (sessionId != null) {
+      final logs = await SupabaseService.getSessionActivityLogs(sessionId.toString());
+      if (logs.isNotEmpty) {
+        if (mounted) {
+          setState(() {
+            _activityLog = logs;
+            _isLoadingLogs = false;
+          });
+        }
+        return;
+      }
+    }
+    // Fallback to mock log if DB has no entries or query fails
+    if (mounted) {
+      setState(() {
+        _activityLog = List<Map<String, dynamic>>.from(_mockActivityLog);
+        _isLoadingLogs = false;
+      });
+    }
   }
 
   final List<Map<String, String>> _mockActivityLog = [
@@ -79,43 +106,55 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     final bool isRated = _session['isRated'] ?? false;
     final int ratingValue = _session['rating'] ?? 0;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCFCFC),
-      appBar: AppBar(
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
+        ),
+      ),
+      child: Scaffold(
         backgroundColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: HestiaColors.primary.withValues(alpha: 0.15),
-                  width: 1,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: HestiaColors.primary.withValues(alpha: 0.15),
+                    width: 1,
+                  ),
                 ),
-              ),
-              child: const Icon(
-                Icons.chevron_left_rounded,
-                color: HestiaColors.primary,
-                size: 20,
+                child: const Icon(
+                  Icons.chevron_left_rounded,
+                  color: HestiaColors.primary,
+                  size: 20,
+                ),
               ),
             ),
           ),
-        ),
-        title: const Text(
-          'Session detail',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: HestiaColors.textDark,
+          title: const Text(
+            'Session detail',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
           ),
+          centerTitle: true,
         ),
-        centerTitle: true,
-      ),
       body: SafeArea(
         child: Column(
           children: [
@@ -261,7 +300,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          'Activity log · ${_mockActivityLog.length} entries',
+                          'Activity log · ${_isLoadingLogs ? "..." : _activityLog.length} entries',
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -307,16 +346,23 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                     const SizedBox(height: 18),
 
                     // Activity log list items
-                    ListView.separated(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _mockActivityLog.length,
-                      separatorBuilder: (context, index) => const SizedBox(height: 12),
-                      itemBuilder: (context, index) {
-                        final entry = _mockActivityLog[index];
-                        return _buildTimelineEntry(entry);
-                      },
-                    ),
+                    _isLoadingLogs
+                        ? const Center(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(vertical: 24.0),
+                              child: CircularProgressIndicator(color: HestiaColors.primary),
+                            ),
+                          )
+                        : ListView.separated(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: _activityLog.length,
+                            separatorBuilder: (context, index) => const SizedBox(height: 12),
+                            itemBuilder: (context, index) {
+                              final entry = _activityLog[index];
+                              return _buildTimelineEntry(entry);
+                            },
+                          ),
 
                     const SizedBox(height: 24),
                   ],
@@ -359,10 +405,28 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           ],
         ),
       ),
+     ),
     );
   }
 
-  Widget _buildTimelineEntry(Map<String, String> entry) {
+  Widget _buildTimelineEntry(Map<String, dynamic> entry) {
+    // Parse time
+    String timeStr = '10:00';
+    try {
+      final loggedAt = entry['logged_at'];
+      if (loggedAt != null) {
+        final time = loggedAt is DateTime ? loggedAt : DateTime.parse(loggedAt.toString()).toLocal();
+        int hour = time.hour;
+        final minute = time.minute.toString().padLeft(2, '0');
+        final period = hour >= 12 ? 'PM' : 'AM';
+        if (hour > 12) hour -= 12;
+        if (hour == 0) hour = 12;
+        timeStr = '$hour:$minute $period';
+      } else if (entry['time'] != null) {
+        timeStr = entry['time'].toString();
+      }
+    } catch (_) {}
+
     return Container(
       padding: const EdgeInsets.all(16.0),
       decoration: BoxDecoration(
@@ -375,7 +439,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         children: [
           // Time label
           Text(
-            entry['time'] ?? '10:00',
+            timeStr,
             style: const TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.bold,
@@ -400,17 +464,17 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  entry['title'] ?? '',
+                  entry['note'] ?? entry['title'] ?? '',
                   style: const TextStyle(
                     fontSize: 13,
                     color: HestiaColors.textDark,
                     height: 1.35,
                   ),
                 ),
-                if (entry['category'] != null) ...[
+                if (entry['activity_type'] != null || entry['category'] != null) ...[
                   const SizedBox(height: 4),
                   Text(
-                    entry['category']!,
+                    entry['activity_type'] ?? entry['category']!,
                     style: const TextStyle(
                       fontSize: 11,
                       color: HestiaColors.textLight,

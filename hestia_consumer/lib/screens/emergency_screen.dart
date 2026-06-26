@@ -76,16 +76,28 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
     final caregiver = widget.bookingData['caregiver_name'] ?? 'Sunita Rao';
     final service = widget.bookingData['title'] ?? 'Post-Delivery Care';
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF1E1E1E), // Black/Dark Grey background for high-contrast emergency mode
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.white70),
-          onPressed: _cancelCountdown,
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
         ),
       ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.close, color: Colors.white70),
+            onPressed: _cancelCountdown,
+          ),
+        ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
@@ -287,6 +299,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
           ),
         ),
       ),
+     ),
     );
   }
 

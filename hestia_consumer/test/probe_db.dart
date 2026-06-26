@@ -51,9 +51,11 @@ void main() {
 
     print('Signing up test user: $testEmail, Phone: $testPhone');
     
-    final authRes = await client.auth.signUp(
+    final authRes = await SupabaseService.signUp(
       email: testEmail,
       password: testPassword,
+      name: testName,
+      phone: testPhone,
     );
 
     final userId = authRes.user?.id;

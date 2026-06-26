@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -13,10 +14,12 @@ enum OtpVerificationType {
   phoneSms,
   /// Email-based OTP for sign-up verification (6 digits)
   emailSignUp,
+  /// Email-based OTP sign-in (6 digits)
+  emailSignIn,
 }
 
 class OtpScreen extends StatefulWidget {
-  /// The phone number (for phoneSms) or email address (for emailSignUp)
+  /// The phone number (for phoneSms) or email address (for emailSignUp/emailSignIn)
   final String contactInfo;
   final OtpVerificationType verificationType;
 
@@ -35,6 +38,11 @@ class OtpScreen extends StatefulWidget {
   const OtpScreen.email({super.key, required String email})
       : contactInfo = email,
         verificationType = OtpVerificationType.emailSignUp;
+
+  /// Convenience constructor for email sign-in OTP
+  const OtpScreen.emailSignIn({super.key, required String email})
+      : contactInfo = email,
+        verificationType = OtpVerificationType.emailSignIn;
 
   @override
   State<OtpScreen> createState() => _OtpScreenState();
@@ -97,6 +105,8 @@ class _OtpScreenState extends State<OtpScreen> {
     try {
       if (widget.verificationType == OtpVerificationType.phoneSms) {
         await SupabaseService.signInWithOtp(phone: widget.contactInfo);
+      } else if (widget.verificationType == OtpVerificationType.emailSignIn) {
+        await SupabaseService.resendSignInEmailOtp(email: widget.contactInfo);
       } else {
         await SupabaseService.resendEmailOtp(email: widget.contactInfo);
       }
@@ -136,9 +146,9 @@ class _OtpScreenState extends State<OtpScreen> {
     }
 
     try {
-      final profileExists = await SupabaseService.checkProfileExists(user.id);
+      final isComplete = await SupabaseService.isProfileComplete(user.id);
       if (mounted) {
-        if (profileExists) {
+        if (isComplete) {
           Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(builder: (context) => const HomeScreen()),
             (route) => false,
@@ -179,6 +189,33 @@ class _OtpScreenState extends State<OtpScreen> {
           phone: widget.contactInfo,
           token: otp,
         );
+        // Update phone verification status to true in user metadata and profile JSON
+        await SupabaseService.updatePhoneVerifiedStatus(true);
+        
+        // If there's a pending signup name, update profile and auth user metadata
+        if (SupabaseService.pendingSignUpName != null) {
+          await SupabaseService.client.auth.updateUser(
+            UserAttributes(
+              data: {
+                'full_name': SupabaseService.pendingSignUpName,
+              },
+            ),
+          );
+          final user = SupabaseService.currentUser;
+          if (user != null) {
+            await SupabaseService.createProfile(
+              id: user.id,
+              fullName: SupabaseService.pendingSignUpName!,
+              phone: widget.contactInfo,
+            );
+          }
+          SupabaseService.pendingSignUpName = null; // Clear static state
+        }
+      } else if (widget.verificationType == OtpVerificationType.emailSignIn) {
+        await SupabaseService.verifyEmailOtp(
+          email: widget.contactInfo,
+          token: otp,
+        );
       } else {
         await SupabaseService.verifyEmailSignUp(
           email: widget.contactInfo,
@@ -187,7 +224,7 @@ class _OtpScreenState extends State<OtpScreen> {
       }
       if (mounted) {
         // Show success message for verification
-        if (widget.verificationType == OtpVerificationType.emailSignUp) {
+        if (widget.verificationType == OtpVerificationType.emailSignUp || widget.verificationType == OtpVerificationType.emailSignIn) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Email verified successfully! Welcome to Hestia.'),
@@ -247,6 +284,8 @@ class _OtpScreenState extends State<OtpScreen> {
         return 'We sent a $_otpLength-digit code to\n';
       case OtpVerificationType.emailSignUp:
         return 'We sent a $_otpLength-digit verification code to\n';
+      case OtpVerificationType.emailSignIn:
+        return 'We sent a $_otpLength-digit sign-in code to\n';
     }
   }
 
@@ -255,6 +294,7 @@ class _OtpScreenState extends State<OtpScreen> {
       case OtpVerificationType.phoneSms:
         return 'Verify OTP';
       case OtpVerificationType.emailSignUp:
+      case OtpVerificationType.emailSignIn:
         return 'Verify Email';
     }
   }
@@ -264,6 +304,7 @@ class _OtpScreenState extends State<OtpScreen> {
       case OtpVerificationType.phoneSms:
         return Icons.sms_outlined;
       case OtpVerificationType.emailSignUp:
+      case OtpVerificationType.emailSignIn:
         return Icons.mark_email_read_outlined;
     }
   }
@@ -275,277 +316,342 @@ class _OtpScreenState extends State<OtpScreen> {
     final double boxSize = _otpLength == 6 ? 46.0 : 68.0;
     final double fontSize = _otpLength == 6 ? 20.0 : 24.0;
 
-    return Scaffold(
-      backgroundColor: HestiaColors.background,
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header Row: Back Button and Hestia Title
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: HestiaColors.primary.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.chevron_left,
-                        color: HestiaColors.primary,
-                        size: 28,
-                      ),
-                    ),
-                  ),
-                  const Text(
-                    'Hestia',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: HestiaColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 40),
-                ],
-              ),
-              
-              const SizedBox(height: 40),
-
-              // Icon badge
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: HestiaColors.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(
-                  _headerIcon,
-                  color: HestiaColors.primary,
-                  size: 28,
-                ),
-              ),
-
-              const SizedBox(height: 20),
-              
-              // Title and Subtitle
-              Text(
-                _titleText,
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: HestiaColors.textDark,
-                ),
-              ),
-              const SizedBox(height: 8),
-              RichText(
-                text: TextSpan(
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: HestiaColors.textMedium,
-                    height: 1.4,
-                  ),
+    return Container(
+      color: const Color(0xFF5E3D1D),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header Row: Back Button and Hestia Title
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    TextSpan(text: _subtitlePrefix),
-                    TextSpan(
-                      text: widget.contactInfo,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: HestiaColors.textDark,
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            width: 1.0,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.chevron_left,
+                          color: Colors.white,
+                          size: 28,
+                        ),
                       ),
                     ),
+                    const Text(
+                      'Hestia',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 40),
                   ],
                 ),
-              ),
+                
+                const SizedBox(height: 40),
+  
+                // Icon badge
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Icon(
+                    _headerIcon,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                ),
+  
+                const SizedBox(height: 20),
+                
+                // Title and Subtitle
+                Text(
+                  _titleText,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                RichText(
+                  text: TextSpan(
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: Colors.white.withValues(alpha: 0.85),
+                      height: 1.4,
+                    ),
+                    children: [
+                      TextSpan(text: _subtitlePrefix),
+                      TextSpan(
+                        text: widget.contactInfo,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (widget.verificationType == OtpVerificationType.phoneSms) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3), width: 1.0),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, color: Colors.orangeAccent, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            widget.contactInfo.endsWith('8144684265')
+                                ? 'Twilio Sandbox: SMS OTP will be sent to your registered sandbox number.'
+                                : 'Twilio Sandbox: SMS will not be sent to this number. Use "123456" as the OTP bypass code.',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12.5,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               
               const SizedBox(height: 40),
               
-              // OTP Digit Inputs
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: List.generate(_otpLength, (index) {
-                  return SizedBox(
-                    width: boxSize,
-                    height: boxSize,
-                    child: KeyboardListener(
-                      focusNode: FocusNode(skipTraversal: true),
-                      onKeyEvent: (event) {
-                        if (event is KeyDownEvent && 
-                            event.logicalKey == LogicalKeyboardKey.backspace && 
-                            _controllers[index].text.isEmpty && 
-                            index > 0) {
-                          _controllers[index - 1].clear();
-                          _focusNodes[index - 1].requestFocus();
-                        }
-                      },
-                      child: TextFormField(
-                        controller: _controllers[index],
-                        focusNode: _focusNodes[index],
-                        textAlign: TextAlign.center,
-                        keyboardType: TextInputType.number,
-                        style: TextStyle(
-                          fontSize: fontSize,
-                          fontWeight: FontWeight.bold,
-                          color: HestiaColors.textDark,
-                        ),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                        ],
-                        decoration: InputDecoration(
-                          filled: true,
-                          fillColor: HestiaColors.inputBackground,
-                          counterText: '',
-                          contentPadding: EdgeInsets.zero,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder, width: 1.5),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder, width: 1.5),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(color: HestiaColors.primary, width: 2.0),
-                          ),
-                        ),
-                        onChanged: (value) {
-                          if (value.length > 1) {
-                            String cleanValue = value.replaceAll(RegExp(r'\D'), '');
-                            bool isPaste = value.length > 2;
-
-                            if (isPaste) {
-                              // Distribute the characters across controllers starting from index
-                              for (int i = 0; i < _otpLength; i++) {
-                                int valueIndex = i - index;
-                                if (valueIndex >= 0 && valueIndex < cleanValue.length) {
-                                  _controllers[i].text = cleanValue[valueIndex];
-                                }
-                              }
-                              // Focus the last filled box or unfocus
-                              int lastFilledIndex = index + cleanValue.length - 1;
-                              if (lastFilledIndex >= _otpLength) {
-                                lastFilledIndex = _otpLength - 1;
-                              }
-                              if (lastFilledIndex < _otpLength - 1) {
-                                _focusNodes[lastFilledIndex + 1].requestFocus();
-                              } else {
-                                _focusNodes[lastFilledIndex].unfocus();
-                              }
-                              return;
-                            } else {
-                              // This is typing a digit in a box that already has a digit (overwrite)
-                              // Extract the new character
-                              String newChar = "";
-                              if (value.startsWith(_controllers[index].text)) {
-                                newChar = value.substring(value.length - 1);
-                              } else {
-                                newChar = value.substring(0, 1);
-                              }
-
-                              _controllers[index].text = newChar;
-                              _controllers[index].selection = TextSelection.fromPosition(
-                                TextPosition(offset: newChar.length),
-                              );
-
-                              if (index < _otpLength - 1) {
-                                _focusNodes[index + 1].requestFocus();
-                              } else {
-                                _focusNodes[index].unfocus();
-                              }
-                              return;
-                            }
-                          }
-
-                          if (value.isNotEmpty) {
-                            if (index < _otpLength - 1) {
-                              _focusNodes[index + 1].requestFocus();
-                            } else {
-                              _focusNodes[index].unfocus();
-                            }
-                          }
-                        },
+              // Glassmorphic Card Container
+              ClipRRect(
+                borderRadius: BorderRadius.circular(24),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 18.0, sigmaY: 18.0),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 28.0),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.18),
+                        width: 1.5,
                       ),
-                    ),
-                  );
-                }),
-              ),
-              
-              const SizedBox(height: 24),
-              
-              // Resend Countdown Timer
-              Center(
-                child: Text(
-                  _canResend ? 'Resend OTP available' : 'Resend OTP in $timerText',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: _canResend ? HestiaColors.textLight : HestiaColors.textAccent,
-                  ),
-                ),
-              ),
-              
-              const SizedBox(height: 48),
-              
-              // Verify Button
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  onPressed: _isVerifying ? null : _verifyOtp,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HestiaColors.primary,
-                    foregroundColor: HestiaColors.buttonText,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    elevation: 0,
-                  ),
-                  child: _isVerifying
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2.5,
-                          ),
-                        )
-                      : const Text(
-                          'Verify & Continue',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
                         ),
-                ),
-              ),
-              
-              const SizedBox(height: 24),
-              
-              // Didn't receive? Resend
-              Center(
-                child: GestureDetector(
-                  onTap: _canResend ? _resendOtp : null,
-                  child: RichText(
-                    text: TextSpan(
-                      style: const TextStyle(
-                        fontSize: 15,
-                        color: HestiaColors.textMedium,
-                      ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const TextSpan(text: "Didn't receive? "),
-                        TextSpan(
-                          text: 'Resend',
-                          style: TextStyle(
-                            color: _canResend ? HestiaColors.textAccent : HestiaColors.textLight,
-                            fontWeight: FontWeight.bold,
-                            decoration: _canResend ? TextDecoration.underline : TextDecoration.none,
+                        // OTP Digit Inputs
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: List.generate(_otpLength, (index) {
+                            return SizedBox(
+                              width: boxSize,
+                              height: boxSize,
+                              child: KeyboardListener(
+                                focusNode: FocusNode(skipTraversal: true),
+                                onKeyEvent: (event) {
+                                  if (event is KeyDownEvent && 
+                                      event.logicalKey == LogicalKeyboardKey.backspace && 
+                                      _controllers[index].text.isEmpty && 
+                                      index > 0) {
+                                    _controllers[index - 1].clear();
+                                    _focusNodes[index - 1].requestFocus();
+                                  }
+                                },
+                                child: TextFormField(
+                                  controller: _controllers[index],
+                                  focusNode: _focusNodes[index],
+                                  textAlign: TextAlign.center,
+                                  keyboardType: TextInputType.number,
+                                  style: TextStyle(
+                                    fontSize: fontSize,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                  ],
+                                  decoration: InputDecoration(
+                                    filled: true,
+                                    fillColor: Colors.white.withValues(alpha: 0.12),
+                                    counterText: '',
+                                    contentPadding: EdgeInsets.zero,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.25), width: 1.2),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.25), width: 1.2),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                      borderSide: const BorderSide(color: Colors.white, width: 1.5),
+                                    ),
+                                  ),
+                                  onChanged: (value) {
+                                    if (value.length > 1) {
+                                      String cleanValue = value.replaceAll(RegExp(r'\D'), '');
+                                      bool isPaste = value.length > 2;
+
+                                      if (isPaste) {
+                                        // Distribute the characters across controllers starting from index
+                                        for (int i = 0; i < _otpLength; i++) {
+                                          int valueIndex = i - index;
+                                          if (valueIndex >= 0 && valueIndex < cleanValue.length) {
+                                            _controllers[i].text = cleanValue[valueIndex];
+                                          }
+                                        }
+                                        // Focus the last filled box or unfocus
+                                        int lastFilledIndex = index + cleanValue.length - 1;
+                                        if (lastFilledIndex >= _otpLength) {
+                                          lastFilledIndex = _otpLength - 1;
+                                        }
+                                        if (lastFilledIndex < _otpLength - 1) {
+                                          _focusNodes[lastFilledIndex + 1].requestFocus();
+                                        } else {
+                                          _focusNodes[lastFilledIndex].unfocus();
+                                        }
+                                        return;
+                                      } else {
+                                        // This is typing a digit in a box that already has a digit (overwrite)
+                                        // Extract the new character
+                                        String newChar = "";
+                                        if (value.startsWith(_controllers[index].text)) {
+                                          newChar = value.substring(value.length - 1);
+                                        } else {
+                                          newChar = value.substring(0, 1);
+                                        }
+
+                                        _controllers[index].text = newChar;
+                                        _controllers[index].selection = TextSelection.fromPosition(
+                                          TextPosition(offset: newChar.length),
+                                        );
+
+                                        if (index < _otpLength - 1) {
+                                          _focusNodes[index + 1].requestFocus();
+                                        } else {
+                                          _focusNodes[index].unfocus();
+                                        }
+                                        return;
+                                      }
+                                    }
+
+                                    if (value.isNotEmpty) {
+                                      if (index < _otpLength - 1) {
+                                        _focusNodes[index + 1].requestFocus();
+                                      } else {
+                                        _focusNodes[index].unfocus();
+                                      }
+                                    }
+                                  },
+                                ),
+                              ),
+                            );
+                          }),
+                        ),
+                        
+                        const SizedBox(height: 24),
+                        
+                        // Resend Countdown Timer
+                        Center(
+                          child: Text(
+                            _canResend ? 'Resend OTP available' : 'Resend OTP in $timerText',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: _canResend ? Colors.white : Colors.white.withValues(alpha: 0.9),
+                            ),
+                          ),
+                        ),
+                        
+                        const SizedBox(height: 36),
+                        
+                        // Verify Button
+                        SizedBox(
+                          width: double.infinity,
+                          height: 56,
+                          child: ElevatedButton(
+                            onPressed: _isVerifying ? null : _verifyOtp,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color.fromARGB(255, 48, 32, 21),
+                              foregroundColor: HestiaColors.buttonText,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              elevation: 0,
+                            ),
+                            child: _isVerifying
+                                ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2.5,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Verify & Continue',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        
+                        const SizedBox(height: 24),
+                        
+                        // Didn't receive? Resend
+                        Center(
+                          child: GestureDetector(
+                            onTap: _canResend ? _resendOtp : null,
+                            child: RichText(
+                              text: TextSpan(
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  color: Colors.white,
+                                ),
+                                children: [
+                                  const TextSpan(text: "Didn't receive? "),
+                                  TextSpan(
+                                    text: 'Resend',
+                                    style: TextStyle(
+                                      color: _canResend ? Colors.white : Colors.white.withValues(alpha: 0.6),
+                                      fontWeight: FontWeight.bold,
+                                      decoration: _canResend ? TextDecoration.underline : TextDecoration.none,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ],
@@ -557,6 +663,7 @@ class _OtpScreenState extends State<OtpScreen> {
           ),
         ),
       ),
-    );
+    ),
+   );
   }
 }

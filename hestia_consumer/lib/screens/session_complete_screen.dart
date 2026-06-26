@@ -29,70 +29,82 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
     final serviceTitle = widget.bookingData['title'] ?? 'Post-Delivery Care';
     final totalAmount = widget.bookingData['amount'] ?? 1497;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFFCFCFC),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        automaticallyImplyLeading: false, // No back button on complete screen
-        title: const Text(
-          'Session complete',
-          style: TextStyle(
-            color: HestiaColors.textDark,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
         ),
-        centerTitle: true,
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 16),
-
-                    // Success Checkmark Circle
-                    Container(
-                      width: 80,
-                      height: 80,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFE8F5ED),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.check_circle_rounded,
-                          color: Color(0xFF2E6B4A),
-                          size: 48,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          automaticallyImplyLeading: false, // No back button on complete screen
+          title: const Text(
+            'Session complete',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          centerTitle: true,
+        ),
+        body: SafeArea(
+          child: Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 16),
+  
+                      // Success Checkmark Circle
+                      Container(
+                        width: 80,
+                        height: 80,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFE8F5ED),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Center(
+                          child: Icon(
+                            Icons.check_circle_rounded,
+                            color: Color(0xFF2E6B4A),
+                            size: 48,
+                          ),
                         ),
                       ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // Main Headers
-                    const Text(
-                      'Session ended',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        color: HestiaColors.textDark,
+  
+                      const SizedBox(height: 20),
+  
+                      // Main Headers
+                      const Text(
+                        'Session ended',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '$serviceTitle · 3 hrs 2 min',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: HestiaColors.textMedium,
-                        fontWeight: FontWeight.w500,
+                      const SizedBox(height: 6),
+                      Text(
+                        '$serviceTitle · 3 hrs 2 min',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.white.withValues(alpha: 0.85),
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
-                    ),
 
                     const SizedBox(height: 28),
 
@@ -264,6 +276,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
           ],
         ),
       ),
+     ),
     );
   }
 

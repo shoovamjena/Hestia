@@ -1,6 +1,9 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../theme/colors.dart';
+import '../services/supabase_service.dart';
+import 'home_screen.dart';
 import 'search_location_screen.dart';
 
 class PostSignInJourneyScreen extends StatefulWidget {
@@ -11,12 +14,67 @@ class PostSignInJourneyScreen extends StatefulWidget {
 }
 
 class _PostSignInJourneyScreenState extends State<PostSignInJourneyScreen> {
+  bool _checkingProfile = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkProfileStatus();
+  }
+
+  Future<void> _checkProfileStatus() async {
+    final user = SupabaseService.currentUser;
+    if (user != null) {
+      try {
+        final isComplete = await SupabaseService.isProfileComplete(user.id);
+        if (isComplete) {
+          if (mounted) {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(builder: (context) => const HomeScreen()),
+              (route) => false,
+            );
+          }
+          return;
+        }
+      } catch (e) {
+        debugPrint('Error checking profile status in PostSignInJourneyScreen: $e');
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _checkingProfile = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: HestiaColors.background,
-      body: SafeArea(
-        child: _HouseholdIntroPage(),
+    if (_checkingProfile) {
+      return const Scaffold(
+        backgroundColor: HestiaColors.background,
+        body: Center(
+          child: CircularProgressIndicator(color: HestiaColors.primary),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
+        ),
+      ),
+      child: const Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SafeArea(
+          child: _HouseholdIntroPage(),
+        ),
       ),
     );
   }
@@ -53,8 +111,15 @@ class _JourneyShell extends StatelessWidget {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: HestiaColors.primary.withValues(alpha: 0.1),
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.1),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
                   ),
                   child: const Icon(
                     Icons.chevron_left,
@@ -68,7 +133,7 @@ class _JourneyShell extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
-                  color: HestiaColors.primary,
+                  color: Colors.white,
                 ),
               ),
               const SizedBox(width: 40),
@@ -83,7 +148,7 @@ class _JourneyShell extends StatelessWidget {
                   height: 4,
                   margin: EdgeInsets.only(right: index == 1 ? 0 : 8),
                   decoration: BoxDecoration(
-                    color: index <= currentPage ? HestiaColors.primary : HestiaColors.indicatorInactive,
+                    color: index <= currentPage ? Colors.white : Colors.white.withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(999),
                   ),
                 ),
@@ -96,21 +161,40 @@ class _JourneyShell extends StatelessWidget {
             style: const TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.bold,
-              color: HestiaColors.textDark,
+              color: Colors.white,
               height: 1.15,
             ),
           ),
           const SizedBox(height: 10),
           Text(
             subtitle,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 15,
-              color: HestiaColors.textMedium,
+              color: Colors.white.withValues(alpha: 0.85),
               height: 1.4,
             ),
           ),
           const SizedBox(height: 24),
-          Expanded(child: child),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(24),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF6F4E37).withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: const Color(0xFF6F4E37).withValues(alpha: 0.18),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: child,
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 20),
           primaryButton,
         ],
@@ -434,13 +518,13 @@ class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: const Color(0xFFF5ECE3),
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFF0E4D9)),
+                  border: Border.all(color: const Color(0xFFE6D5C5)),
                 ),
                 child: Row(
                   children: const [
-                    _IconBadge(icon: Icons.add, background: Color(0xFFF3E7DB)),
+                    _IconBadge(icon: Icons.add, background: Color(0xFFE6D5C5)),
                     SizedBox(width: 14),
                     Expanded(
                       child: Column(
@@ -487,17 +571,21 @@ class _ReasonChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
       decoration: BoxDecoration(
-        color: selected ? HestiaColors.primary : Colors.white,
+        color: selected 
+            ? HestiaColors.primary 
+            : HestiaColors.primary.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: selected ? HestiaColors.primary : HestiaColors.inputBorder,
+          color: selected 
+              ? HestiaColors.primary 
+              : HestiaColors.primary.withValues(alpha: 0.25),
         ),
       ),
       child: Text(
         label,
         style: TextStyle(
           fontSize: 14,
-          color: selected ? Colors.white : HestiaColors.textDark,
+          color: selected ? Colors.white : HestiaColors.primary,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -525,7 +613,7 @@ class _HouseholdMemberCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F3EE),
+        color: const Color(0xFFF5ECE3),
         borderRadius: BorderRadius.circular(18),
       ),
       child: Row(

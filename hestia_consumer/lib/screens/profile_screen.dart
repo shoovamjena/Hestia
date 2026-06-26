@@ -3,9 +3,11 @@ import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'landing_screen.dart';
 import 'search_location_screen.dart';
+import 'otp_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  final bool showBackButton;
+  const ProfileScreen({super.key, this.showBackButton = true});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -16,6 +18,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _name = 'User';
   String _email = '';
   String _phone = '';
+  bool _isPhoneVerified = false;
   String _primaryReason = 'New mother';
   List<dynamic> _members = [];
   Map<String, dynamic> _address = {
@@ -32,15 +35,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadProfileData() async {
-    setState(() {
-      _isLoading = true;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
     final user = SupabaseService.currentUser;
     if (user != null) {
       // Pre-populate with auth metadata
       _name = user.userMetadata?['full_name'] ?? 'User';
       _email = user.email ?? '';
       _phone = user.phone ?? user.userMetadata?['phone'] ?? '';
+      _isPhoneVerified = SupabaseService.isPhoneVerified();
 
       try {
         var data = await SupabaseService.getUserProfile(user.id);
@@ -49,24 +55,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
         final profileMap = data;
         if (profileMap != null) {
-          setState(() {
-            _name = profileMap['name'] ?? _name;
-            _email = profileMap['email'] ?? _email;
-            _phone = profileMap['phone'] ?? _phone;
-            _primaryReason = profileMap['primary_reason'] ?? _primaryReason;
-            _members = profileMap['household_members'] ?? [];
-            if (profileMap['address'] != null) {
-              _address = Map<String, dynamic>.from(profileMap['address']);
-            }
-          });
+          if (mounted) {
+            setState(() {
+              _name = profileMap['name'] ?? _name;
+              _email = profileMap['email'] ?? _email;
+              _phone = profileMap['phone'] ?? _phone;
+              _isPhoneVerified = profileMap['phone_verified'] == true || SupabaseService.isPhoneVerified();
+              _primaryReason = profileMap['primary_reason'] ?? _primaryReason;
+              _members = profileMap['household_members'] ?? [];
+              if (profileMap['address'] != null) {
+                _address = Map<String, dynamic>.from(profileMap['address']);
+              }
+            });
+          }
         }
       } catch (e) {
         debugPrint('Error loading profile details: $e');
       }
     }
-    setState(() {
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   String _getInitials(String name) {
@@ -713,18 +724,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          GestureDetector(
-                            onTap: () => Navigator.pop(context),
-                            child: Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(12),
+                          if (widget.showBackButton)
+                            GestureDetector(
+                              onTap: () => Navigator.pop(context),
+                              child: Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(Icons.chevron_left, color: Colors.white, size: 28),
                               ),
-                              child: const Icon(Icons.chevron_left, color: Colors.white, size: 28),
-                            ),
-                          ),
+                            )
+                          else
+                            const SizedBox(width: 40),
                           const Text(
                             'Hestia Profile',
                             style: TextStyle(
@@ -839,7 +853,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               const Divider(height: 24, thickness: 0.8),
                               _buildDetailRow(Icons.email_outlined, 'Email Address', _email),
                               const Divider(height: 24, thickness: 0.8),
-                              _buildDetailRow(Icons.phone_outlined, 'Phone Number', _phone),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.phone_outlined, color: HestiaColors.primary, size: 20),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Phone Number',
+                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _phone.isNotEmpty ? _phone : 'Not provided',
+                                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: HestiaColors.textDark),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  _buildPhoneVerificationBadge(),
+                                ],
+                              ),
                             ]),
 
                             const SizedBox(height: 28),
@@ -1093,5 +1130,105 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ],
     );
+  }
+
+  Widget _buildPhoneVerificationBadge() {
+    if (_phone.isEmpty) return const SizedBox.shrink();
+    
+    if (_isPhoneVerified) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.green.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.green.withValues(alpha: 0.3), width: 1.0),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.check_circle, color: Colors.green, size: 14),
+            SizedBox(width: 4),
+            Text(
+              'Verified',
+              style: TextStyle(
+                color: Colors.green,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      return GestureDetector(
+        onTap: _startPhoneVerification,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFC0392B).withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFC0392B).withValues(alpha: 0.3), width: 1.0),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.warning_amber_rounded, color: Color(0xFFC0392B), size: 14),
+              SizedBox(width: 4),
+              Text(
+                'Verify Now',
+                style: TextStyle(
+                  color: Color(0xFFC0392B),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _startPhoneVerification() async {
+    if (_phone.isEmpty) return;
+    
+    // Show a loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: HestiaColors.primary),
+      ),
+    );
+    
+    try {
+      final phone = _phone.startsWith('+') ? _phone : '+91${_phone.replaceAll(' ', '')}';
+      await SupabaseService.signInWithOtp(phone: phone);
+      if (mounted) {
+        Navigator.pop(context); // Close loading indicator
+        // Navigate to OTP screen for phone verification
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => OtpScreen(
+              contactInfo: phone,
+              verificationType: OtpVerificationType.phoneSms,
+            ),
+          ),
+        ).then((_) {
+          // Re-load profile data when returning to check if phone is verified
+          _loadProfileData();
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading indicator
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send verification code: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
   }
 }

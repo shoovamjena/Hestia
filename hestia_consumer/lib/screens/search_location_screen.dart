@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../config/mapbox_config.dart';
 import '../services/supabase_service.dart';
-import 'add_address_screen.dart';
 import 'confirm_location_screen.dart';
 import '../theme/colors.dart';
 import 'home_screen.dart';
@@ -173,12 +173,9 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
     return [];
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     const greenAccent = HestiaColors.primary;
-    const bgTint = Color(0xFFF7F9FC);
 
     // Format address text to display
     String addressText = "89, Usuw, Pocket 25, Pocket 25, Bharat singh, Pista, New Delhi, Delhi, India, 110085,";
@@ -196,87 +193,107 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
       addressText = "${parts.join(", ")},";
     }
 
-    return Scaffold(
-      backgroundColor: bgTint,
-      appBar: AppBar(
-        backgroundColor: bgTint,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF1E1E1E), size: 24),
-          onPressed: () => Navigator.pop(context),
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment(0.0, 0.4),
+          colors: [
+            Color.fromARGB(255, 94, 61, 29),
+            Color.fromARGB(255, 139, 106, 65),
+            Color.fromARGB(255, 252, 252, 252),
+          ],
         ),
-        title: const Text(
-          'Search your location',
-          style: TextStyle(
-            fontFamily: 'Outfit',
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF1E1E1E),
-          ),
-        ),
-        titleSpacing: 0,
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Search box
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x0C000000),
-                    blurRadius: 10,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: TextFormField(
-                controller: _searchController,
-                onChanged: _onSearchChanged,
-                style: const TextStyle(
-                  color: Color(0xFF1E1E1E),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-                decoration: InputDecoration(
-                  hintText: 'Search locality, sector, area',
-                  hintStyle: TextStyle(
-                    color: Colors.grey.shade400,
-                    fontWeight: FontWeight.normal,
-                    fontSize: 15,
-                  ),
-                  prefixIcon: const Icon(
-                    Icons.search,
-                    color: greenAccent,
-                    size: 24,
-                  ),
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                ),
-              ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white, size: 24),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: const Text(
+            'Search your location',
+            style: TextStyle(
+              fontFamily: 'Outfit',
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
             ),
           ),
+          titleSpacing: 0,
+        ),
+        body: SafeArea(
+          left: false,
+          right: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Search box - liquid glass
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.25),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: TextFormField(
+                        controller: _searchController,
+                        onChanged: _onSearchChanged,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'Search locality, sector, area',
+                          hintStyle: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.6),
+                            fontWeight: FontWeight.normal,
+                            fontSize: 15,
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.search,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
 
-          // Search Suggestions or Action Items & Saved Addresses
-          Expanded(
-            child: _searchController.text.trim().isNotEmpty
-                ? _buildSearchSuggestions(greenAccent)
-                : _buildHomeState(greenAccent, addressText),
+              // Search Suggestions or Action Items & Saved Addresses
+              Expanded(
+                child: _searchController.text.trim().isNotEmpty
+                    ? _buildSearchSuggestions(greenAccent)
+                    : _buildHomeState(greenAccent, addressText),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildSearchSuggestions(Color greenAccent) {
     if (_isSearching) {
-      return Center(
-        child: CircularProgressIndicator(color: greenAccent),
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
       );
     }
 
@@ -285,52 +302,72 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.search_off_rounded, size: 48, color: Colors.grey.shade400),
+            const Icon(Icons.search_off_rounded, size: 48, color: Colors.white70),
             const SizedBox(height: 12),
             Text(
               "No results found",
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 15),
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 15),
             ),
           ],
         ),
       );
     }
 
-    return ListView.separated(
-      physics: const BouncingScrollPhysics(),
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 10.0),
-      itemCount: _searchResults.length,
-      separatorBuilder: (context, index) => Divider(color: Colors.grey.shade200, height: 1),
-      itemBuilder: (context, index) {
-        final item = _searchResults[index];
-        return ListTile(
-          leading: const Icon(Icons.location_on_outlined, color: Colors.grey),
-          title: Text(
-            item['place_name'],
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF1E1E1E)),
-          ),
-          onTap: () {
-            // Push AddAddressScreen with search data pre-filled
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => AddAddressScreen(
-                  editMode: true,
-                  initialAddress: {
-                    'flat': '',
-                    'street': item['street'],
-                    'city': item['city'],
-                    'pincode': item['pincode'],
-                  },
-                  initialCoords: LatLng(item['lat'], item['lng']),
-                  isPostSignInJourney: widget.isPostSignInJourney,
-                  primaryReason: widget.primaryReason,
-                  members: widget.members,
-                ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.25),
+                width: 1.5,
               ),
-            ).then((_) => _loadAddress());
-          },
-        );
-      },
+            ),
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(vertical: 8.0),
+              itemCount: _searchResults.length,
+              separatorBuilder: (context, index) => Divider(color: Colors.white.withValues(alpha: 0.15), height: 1),
+              itemBuilder: (context, index) {
+                final item = _searchResults[index];
+                return ListTile(
+                  leading: const Icon(Icons.location_on_outlined, color: Colors.white),
+                  title: Text(
+                    item['place_name'],
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white),
+                  ),
+                  onTap: () {
+                    // Push ConfirmLocationScreen with search data pre-filled
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => ConfirmLocationScreen(
+                          editMode: true,
+                          initialAddress: {
+                            'flat': '',
+                            'street': item['street'],
+                            'city': item['city'],
+                            'pincode': item['pincode'],
+                          },
+                          initialCoords: LatLng(item['lat'], item['lng']),
+                          isPostSignInJourney: widget.isPostSignInJourney,
+                          primaryReason: widget.primaryReason,
+                          members: widget.members,
+                        ),
+                      ),
+                    ).then((_) => _loadAddress());
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -345,100 +382,105 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Grouped Card: Add Address + Use Current Location
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x05000000),
-                        blurRadius: 8,
-                        offset: Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      // "+ Add address"
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => AddAddressScreen(
-                                editMode: false,
-                                isPostSignInJourney: widget.isPostSignInJourney,
-                                primaryReason: widget.primaryReason,
-                                members: widget.members,
-                              ),
-                            ),
-                          ).then((_) => _loadAddress());
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
-                          child: Row(
-                            children: [
-                              Icon(Icons.add, color: greenAccent, size: 22),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Text(
-                                  'Add address',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.bold,
-                                    color: greenAccent,
-                                  ),
-                                ),
-                              ),
-                              Icon(Icons.chevron_right, color: Colors.grey.shade400, size: 20),
-                            ],
-                          ),
+                // Grouped Card: Add Address + Use Current Location - liquid glass
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.25),
+                          width: 1.5,
                         ),
                       ),
-                      
-                      // Divider
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                        child: Divider(color: Colors.grey.shade100, height: 1),
-                      ),
+                      child: Column(
+                        children: [
+                          // "+ Add address"
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) => ConfirmLocationScreen(
+                                    editMode: false,
+                                    isPostSignInJourney: widget.isPostSignInJourney,
+                                    primaryReason: widget.primaryReason,
+                                    members: widget.members,
+                                  ),
+                                ),
+                              ).then((_) => _loadAddress());
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.add, color: Colors.white, size: 22),
+                                  const SizedBox(width: 14),
+                                  const Expanded(
+                                    child: Text(
+                                      'Add address',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(Icons.chevron_right, color: Colors.white.withValues(alpha: 0.6), size: 20),
+                                ],
+                              ),
+                            ),
+                          ),
+                          
+                          // Divider
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                            child: Divider(color: Colors.white.withValues(alpha: 0.15), height: 1),
+                          ),
 
-                      // "Use current location"
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) => ConfirmLocationScreen(
-                                isPostSignInJourney: widget.isPostSignInJourney,
-                                primaryReason: widget.primaryReason,
-                                members: widget.members,
-                              ),
-                            ),
-                          ).then((_) => _loadAddress());
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
-                          child: Row(
-                            children: [
-                              Icon(Icons.my_location, color: greenAccent, size: 20),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Text(
-                                  'Use current location',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.bold,
-                                    color: greenAccent,
+                          // "Use current location"
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (context) => ConfirmLocationScreen(
+                                    editMode: false,
+                                    useCurrentLocation: true,
+                                    isPostSignInJourney: widget.isPostSignInJourney,
+                                    primaryReason: widget.primaryReason,
+                                    members: widget.members,
                                   ),
                                 ),
+                              ).then((_) => _loadAddress());
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.my_location, color: Colors.white, size: 20),
+                                  const SizedBox(width: 16),
+                                  const Expanded(
+                                    child: Text(
+                                      'Use current location',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(Icons.chevron_right, color: Colors.white.withValues(alpha: 0.6), size: 20),
+                                ],
                               ),
-                              Icon(Icons.chevron_right, color: Colors.grey.shade400, size: 20),
-                            ],
+                            ),
                           ),
-                        ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
 
@@ -450,157 +492,168 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF8A94A6),
+                    color: Color(0xFF6F4E37),
                     letterSpacing: 1.2,
                   ),
                 ),
 
                 const SizedBox(height: 12),
 
-                // Saved Address Card
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20.0),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x06000000),
-                        blurRadius: 10,
-                        offset: Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Location Pin badge (grey rounded container)
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF7F8FA),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(
-                          Icons.location_on_outlined,
-                          color: Color(0xFF8A94A6),
-                          size: 24,
+                // Saved Address Card - liquid glass tinted brown for off-white end of gradient
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(20.0),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5ECE3).withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: const Color(0xFFE6D5C5).withValues(alpha: 0.9),
+                          width: 1.5,
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      
-                      // Address Details
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Location Pin badge (brown tinted glass container)
+                          Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE6D5C5).withValues(alpha: 0.4),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.location_on_outlined,
+                              color: Color(0xFF6F4E37),
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          
+                          // Address Details
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
-                                  'Home',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF1E1E1E),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFFAF2EB),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: const Text(
-                                    'Currently selected',
-                                    style: TextStyle(
-                                      color: HestiaColors.primary,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    const Text(
+                                      'Home',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF5E3D1D),
+                                      ),
                                     ),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFAF2EB),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Text(
+                                        'Currently selected',
+                                        style: TextStyle(
+                                          color: HestiaColors.primary,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  addressText,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF6F4E37),
+                                    height: 1.45,
                                   ),
                                 ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              addressText,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey.shade600,
-                                height: 1.45,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'Mobile:$_phone',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                            
-                             // Action Buttons (EDIT / CONFIRM & CONTINUE)
-                             Row(
-                               children: [
-                                 GestureDetector(
-                                   onTap: () {
-                                     final initialAddr = _useFallbackMock
-                                         ? {
-                                             'flat': '89, Usuw',
-                                             'street': 'Pocket 25, Pocket 25, Bharat singh, Pista',
-                                             'city': 'New Delhi, Delhi',
-                                             'pincode': '110085',
-                                           }
-                                         : _dbAddress;
-                                         
-                                     Navigator.of(context).push(
-                                       MaterialPageRoute(
-                                         builder: (context) => AddAddressScreen(
-                                           editMode: true,
-                                           initialAddress: initialAddr,
-                                           isPostSignInJourney: widget.isPostSignInJourney,
-                                           primaryReason: widget.primaryReason,
-                                           members: widget.members,
+                                const SizedBox(height: 6),
+                                Text(
+                                  'Mobile: $_phone',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: Color(0xFF6F4E37),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                
+                                 // Action Buttons (EDIT / CONFIRM & CONTINUE)
+                                 Row(
+                                   children: [
+                                     GestureDetector(
+                                       onTap: () {
+                                         final initialAddr = _useFallbackMock
+                                             ? {
+                                                 'flat': '89, Usuw',
+                                                 'street': 'Pocket 25, Pocket 25, Bharat singh, Pista',
+                                                 'city': 'New Delhi, Delhi',
+                                                 'pincode': '110085',
+                                               }
+                                             : _dbAddress;
+
+                                         LatLng? initialCoords;
+                                         if (!_useFallbackMock && _dbAddress != null) {
+                                           // Centering on default coordinates
+                                         } else {
+                                           initialCoords = const LatLng(28.6139, 77.2090);
+                                         }
+                                             
+                                         Navigator.of(context).push(
+                                           MaterialPageRoute(
+                                             builder: (context) => ConfirmLocationScreen(
+                                               editMode: true,
+                                               initialAddress: initialAddr,
+                                               initialCoords: initialCoords,
+                                               isPostSignInJourney: widget.isPostSignInJourney,
+                                               primaryReason: widget.primaryReason,
+                                               members: widget.members,
+                                             ),
+                                           ),
+                                         ).then((_) => _loadAddress());
+                                       },
+                                       child: const Text(
+                                         'EDIT',
+                                         style: TextStyle(
+                                           fontSize: 13,
+                                           fontWeight: FontWeight.bold,
+                                           color: HestiaColors.primary,
+                                           letterSpacing: 0.5,
                                          ),
                                        ),
-                                     ).then((_) => _loadAddress());
-                                   },
-                                   child: Text(
-                                     'EDIT',
-                                     style: TextStyle(
-                                       fontSize: 13,
-                                       fontWeight: FontWeight.bold,
-                                       color: greenAccent,
-                                       letterSpacing: 0.5,
                                      ),
-                                   ),
-                                 ),
-                                 if (widget.isPostSignInJourney) ...[
-                                   const SizedBox(width: 24),
-                                   GestureDetector(
-                                     onTap: () => _confirmExistingAddress(context, addressText),
-                                     child: Text(
-                                       'CONFIRM & CONTINUE',
-                                       style: TextStyle(
-                                         fontSize: 13,
-                                         fontWeight: FontWeight.bold,
-                                         color: greenAccent,
-                                         letterSpacing: 0.5,
+                                     if (widget.isPostSignInJourney) ...[
+                                       const SizedBox(width: 24),
+                                       GestureDetector(
+                                         onTap: () => _confirmExistingAddress(context, addressText),
+                                         child: const Text(
+                                           'CONFIRM & CONTINUE',
+                                           style: TextStyle(
+                                             fontSize: 13,
+                                             fontWeight: FontWeight.bold,
+                                             color: HestiaColors.primary,
+                                             letterSpacing: 0.5,
+                                           ),
+                                         ),
                                        ),
-                                     ),
-                                   ),
-                                 ],
-                               ],
-                             ),
-                          ],
-                        ),
+                                     ],
+                                   ],
+                                 ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ],
