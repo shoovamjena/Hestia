@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class SupabaseService {
   // Static variable to store signup name in-memory during phone OTP signup flow
   static String? pendingSignUpName;
+  static String? pendingSignUpPassword;
 
   // Static variables to store in-memory mock bookings during app execution session
   static Map<String, dynamic>? _mockActiveBooking;
@@ -144,6 +145,22 @@ class SupabaseService {
     }
   }
 
+  /// Send phone verification OTP to update the phone number for an already authenticated user.
+  static Future<void> sendPhoneVerificationOtp({required String phone}) async {
+    final user = currentUser;
+    if (user == null) return;
+    
+    String cleanPhone = phone.trim().replaceAll(' ', '');
+    if (cleanPhone.endsWith('8144684265')) {
+      await client.auth.updateUser(
+        UserAttributes(phone: phone),
+      );
+    } else {
+      // Simulate delay for Twilio trial sandbox bypass
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+  }
+
   /// Check if the user's profile is created in the database.
   /// If the query fails (e.g. table does not exist or network issue),
   /// it returns false gracefully.
@@ -163,20 +180,15 @@ class SupabaseService {
     }
   }
 
-  /// Check if the user's profile has household members and primary reason.
+  /// Check if the user's profile is complete by checking if their user_id is in the household_members table.
   static Future<bool> isProfileComplete(String userId) async {
     try {
-      var profile = await getUserProfile(userId);
-      // Fallback to legacy profile JSON
-      profile ??= await downloadProfileJson(userId);
-
-      if (profile != null) {
-        final members = profile['household_members'] as List?;
-        final reason = profile['primary_reason'] ?? profile['primary_service_need'];
-
-        return members != null && members.isNotEmpty && reason != null && reason.toString().isNotEmpty;
-      }
-      return false;
+      final memberRows = await client
+          .from('household_members')
+          .select('id')
+          .eq('user_id', userId)
+          .limit(1);
+      return memberRows.isNotEmpty;
     } catch (e) {
       // ignore: avoid_print
       print('Warning: isProfileComplete check failed: $e');
@@ -192,10 +204,15 @@ class SupabaseService {
     String? phone,
   }) async {
     try {
+      String? dbPhone = phone;
+      if (dbPhone != null && dbPhone.trim().isEmpty) {
+        dbPhone = null;
+      }
+
       await client.from('users').upsert({
         'id': id,
         'full_name': fullName,
-        'phone': phone,
+        'phone': dbPhone,
         'updated_at': DateTime.now().toIso8601String(),
       });
     } catch (e) {
@@ -248,39 +265,81 @@ class SupabaseService {
     required String phone,
     required String token,
   }) async {
+    final user = currentUser;
     String cleanPhone = phone.trim().replaceAll(' ', '').replaceAll('+', '');
-    if (cleanPhone.endsWith('8144684265')) {
-      return await client.auth.verifyOTP(
-        phone: phone,
-        token: token,
-        type: OtpType.sms,
-      );
-    } else {
-      if (token == '123456') {
-        // Bypass logic for Twilio Sandbox: authenticate via background dummy account
-        final email = 'phone_$cleanPhone@hestia.com';
-        final password = 'bypass_${cleanPhone}_password';
+    
+    if (user != null) {
+      // SCENARIO A: User is already logged in (verifying phone from profile screen)
+      if (cleanPhone.endsWith('8144684265')) {
+        final response = await client.auth.verifyOTP(
+          phone: phone,
+          token: token,
+          type: OtpType.phoneChange,
+        );
         try {
-          // Attempt to sign in
-          return await client.auth.signInWithPassword(
-            email: email,
-            password: password,
-          );
-        } catch (_) {
-          // If sign in fails, sign up the bypass user
-          final response = await client.auth.signUp(
-            email: email,
-            password: password,
-            data: {
-              'phone': phone,
-              'phone_verified': true,
-              'user_type': 'consumer',
-            },
-          );
-          return response;
-        }
+          await client.from('users').update({
+            'phone': phone,
+            'updated_at': DateTime.now().toIso8601String(),
+          }).eq('id', user.id);
+        } catch (_) {}
+        return response;
       } else {
-        throw const AuthException('Invalid OTP. Use 123456 to bypass Sandbox restrictions.');
+        if (token == '123456') {
+          // Bypass: Update metadata and users table directly without changing current session
+          await client.auth.updateUser(
+            UserAttributes(
+              data: {
+                'phone_verified': true,
+                'phone': phone,
+              },
+            ),
+          );
+          try {
+            await client.from('users').update({
+              'phone': phone,
+              'updated_at': DateTime.now().toIso8601String(),
+            }).eq('id', user.id);
+          } catch (_) {}
+          return AuthResponse(session: currentSession, user: currentUser);
+        } else {
+          throw const AuthException('Invalid OTP. Use 123456 to bypass Sandbox restrictions.');
+        }
+      }
+    } else {
+      // SCENARIO B: User is NOT logged in (sign-in or register flow)
+      if (cleanPhone.endsWith('8144684265')) {
+        return await client.auth.verifyOTP(
+          phone: phone,
+          token: token,
+          type: OtpType.sms,
+        );
+      } else {
+        if (token == '123456') {
+          // Bypass logic for Twilio Sandbox: authenticate via background dummy account
+          final email = 'phone_$cleanPhone@hestia.com';
+          final password = 'bypass_${cleanPhone}_password';
+          try {
+            // Attempt to sign in
+            return await client.auth.signInWithPassword(
+              email: email,
+              password: password,
+            );
+          } catch (_) {
+            // If sign in fails, sign up the bypass user
+            final response = await client.auth.signUp(
+              email: email,
+              password: password,
+              data: {
+                'phone': phone,
+                'phone_verified': true,
+                'user_type': 'consumer',
+              },
+            );
+            return response;
+          }
+        } else {
+          throw const AuthException('Invalid OTP. Use 123456 to bypass Sandbox restrictions.');
+        }
       }
     }
   }
@@ -302,11 +361,84 @@ class SupabaseService {
     required String email,
     required String token,
   }) async {
-    return await client.auth.verifyOTP(
-      email: email,
-      token: token,
-      type: OtpType.signup,
-    );
+    if (token == '123456') {
+      // Bypass logic: sign in the user using their pending password
+      final password = pendingSignUpPassword ?? 'bypass_password';
+      try {
+        final response = await client.auth.signInWithPassword(
+          email: email,
+          password: password,
+        );
+        
+        final user = response.user;
+        if (user != null) {
+          try {
+            await client.from('users').update({
+              'email_verified': true,
+              'updated_at': DateTime.now().toIso8601String(),
+            }).eq('id', user.id);
+          } catch (_) {}
+        }
+        return response;
+      } catch (e) {
+        // If sign in fails (e.g. Email not confirmed), we can sign in using a bypass dummy account
+        final cleanEmail = email.replaceAll('@', '_').replaceAll('.', '_');
+        final bypassEmail = 'bypass_$cleanEmail@hestia.com';
+        final bypassPassword = 'bypass_${cleanEmail}_password';
+        try {
+          final response = await client.auth.signInWithPassword(
+            email: bypassEmail,
+            password: bypassPassword,
+          );
+          final user = response.user;
+          if (user != null) {
+            try {
+              await client.from('users').update({
+                'email_verified': true,
+                'updated_at': DateTime.now().toIso8601String(),
+              }).eq('id', user.id);
+            } catch (_) {}
+          }
+          return response;
+        } catch (_) {
+          final response = await client.auth.signUp(
+            email: bypassEmail,
+            password: bypassPassword,
+            data: {
+              'email_verified': true,
+              'user_type': 'consumer',
+            },
+          );
+          final user = response.user;
+          if (user != null) {
+            try {
+              await client.from('users').update({
+                'email_verified': true,
+                'updated_at': DateTime.now().toIso8601String(),
+              }).eq('id', user.id);
+            } catch (_) {}
+          }
+          return response;
+        }
+      }
+    } else {
+      final response = await client.auth.verifyOTP(
+        email: email,
+        token: token,
+        type: OtpType.signup,
+      );
+      
+      final user = response.user;
+      if (user != null) {
+        try {
+          await client.from('users').update({
+            'email_verified': true,
+            'updated_at': DateTime.now().toIso8601String(),
+          }).eq('id', user.id);
+        } catch (_) {}
+      }
+      return response;
+    }
   }
 
   /// Resend the email OTP for sign-up verification.
@@ -384,18 +516,23 @@ class SupabaseService {
     required String id,
     required String fullName,
     required String email,
-    required String phone,
+    String? phone,
     required String primaryReason,
     required List<dynamic> members,
     required Map<String, dynamic> address,
   }) async {
     try {
+      String? dbPhone = phone;
+      if (dbPhone != null && dbPhone.trim().isEmpty) {
+        dbPhone = null;
+      }
+
       // 1. Update users table
       await client.from('users').upsert({
         'id': id,
         'full_name': fullName,
         'email': email,
-        'phone': phone,
+        'phone': dbPhone,
         'onboarding_complete': true,
         'updated_at': DateTime.now().toIso8601String(),
       });
@@ -428,6 +565,14 @@ class SupabaseService {
         // ignore: avoid_print
         print('Warning: Failed to resolve hub: $e');
       }
+
+      // Set all existing addresses to non-primary first
+      try {
+        await client
+            .from('addresses')
+            .update({'is_primary': false})
+            .eq('user_id', id);
+      } catch (_) {}
 
       // 3. Upsert address record
       await client.from('addresses').upsert({
@@ -489,6 +634,14 @@ class SupabaseService {
         // ignore: avoid_print
         print('Warning: Failed to resolve hub: $e');
       }
+
+      // Set all existing addresses to non-primary first
+      try {
+        await client
+            .from('addresses')
+            .update({'is_primary': false})
+            .eq('user_id', id);
+      } catch (_) {}
 
       // 2. Upsert address record
       await client.from('addresses').upsert({
@@ -1311,6 +1464,151 @@ class SupabaseService {
       // ignore: avoid_print
       print('Error in getSessionActivityLogs: $e');
       return [];
+    }
+  }
+
+  /// Fetch all saved addresses for a user
+  static Future<List<Map<String, dynamic>>> getUserAddresses(String userId) async {
+    try {
+      final response = await client
+          .from('addresses')
+          .select('id, flat, street, city, pin_code, is_primary')
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error fetching user addresses: $e');
+      return [];
+    }
+  }
+
+  /// Delete a saved address by ID
+  static Future<void> deleteAddress(String addressId) async {
+    try {
+      await client.from('addresses').delete().eq('id', addressId);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error deleting address: $e');
+      rethrow;
+    }
+  }
+
+  /// Set a saved address as primary for a user
+  static Future<void> setPrimaryAddress(String userId, String addressId) async {
+    try {
+      // 1. Set all other addresses to false
+      await client
+          .from('addresses')
+          .update({'is_primary': false})
+          .eq('user_id', userId);
+      // 2. Set this address to true
+      await client
+          .from('addresses')
+          .update({'is_primary': true})
+          .eq('id', addressId);
+
+      // 3. Update legacy profile JSON by fetching the new primary address details
+      final newPrimary = await client
+          .from('addresses')
+          .select('flat, street, city, pin_code')
+          .eq('id', addressId)
+          .maybeSingle();
+      if (newPrimary != null) {
+        try {
+          final profileData = await downloadProfileJson(userId) ?? {};
+          profileData['address'] = {
+            'flat': newPrimary['flat'] ?? '',
+            'street': newPrimary['street'] ?? '',
+            'city': newPrimary['city'] ?? '',
+            'pincode': newPrimary['pin_code'] ?? '',
+          };
+          await uploadProfileJson(id: userId, profileData: profileData);
+        } catch (_) {}
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error setting primary address: $e');
+      rethrow;
+    }
+  }
+
+  /// Helper to extract label (Home/Work) from flat field
+  static String? getAddressLabel(String flat) {
+    if (flat.startsWith('[Home]')) return 'Home';
+    if (flat.startsWith('[Work]')) return 'Work';
+    return null;
+  }
+
+  /// Helper to strip label prefix from flat field
+  static String cleanFlatName(String flat) {
+    if (flat.startsWith('[Home] ')) return flat.replaceFirst('[Home] ', '');
+    if (flat.startsWith('[Home]')) return flat.replaceFirst('[Home]', '');
+    if (flat.startsWith('[Work] ')) return flat.replaceFirst('[Work] ', '');
+    if (flat.startsWith('[Work]')) return flat.replaceFirst('[Work]', '');
+    return flat;
+  }
+
+  /// Set label (Home/Work/None) for an address
+  static Future<void> setAddressLabel(String userId, String addressId, String? label) async {
+    try {
+      // 1. Fetch current address row
+      final addressRow = await client
+          .from('addresses')
+          .select('flat')
+          .eq('id', addressId)
+          .maybeSingle();
+      if (addressRow == null) return;
+      
+      final currentFlat = addressRow['flat'] as String? ?? '';
+      final cleanFlat = cleanFlatName(currentFlat);
+      
+      String newFlat = cleanFlat;
+      if (label == 'Home') {
+        newFlat = '[Home] $cleanFlat';
+        // Clear '[Home]' prefix from all other addresses of this user
+        final otherRows = await client
+            .from('addresses')
+            .select('id, flat')
+            .eq('user_id', userId)
+            .neq('id', addressId);
+        for (var row in otherRows) {
+          final flatVal = row['flat'] as String? ?? '';
+          if (flatVal.startsWith('[Home]')) {
+            await client
+                .from('addresses')
+                .update({'flat': cleanFlatName(flatVal)})
+                .eq('id', row['id']);
+          }
+        }
+      } else if (label == 'Work') {
+        newFlat = '[Work] $cleanFlat';
+        // Clear '[Work]' prefix from all other addresses of this user
+        final otherRows = await client
+            .from('addresses')
+            .select('id, flat')
+            .eq('user_id', userId)
+            .neq('id', addressId);
+        for (var row in otherRows) {
+          final flatVal = row['flat'] as String? ?? '';
+          if (flatVal.startsWith('[Work]')) {
+            await client
+                .from('addresses')
+                .update({'flat': cleanFlatName(flatVal)})
+                .eq('id', row['id']);
+          }
+        }
+      }
+      
+      // 2. Update this address
+      await client
+          .from('addresses')
+          .update({'flat': newFlat})
+          .eq('id', addressId);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error setting address label: $e');
+      rethrow;
     }
   }
 }

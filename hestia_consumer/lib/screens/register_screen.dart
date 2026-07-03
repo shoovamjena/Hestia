@@ -121,6 +121,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         } else {
           final phone = '+91${_phoneController.text.trim().replaceAll(' ', '')}';
           if (_signUpMethod == SignUpMethod.emailPassword) {
+            SupabaseService.pendingSignUpPassword = _passwordController.text;
             final response = await SupabaseService.signUpWithEmail(
               email: _emailController.text.trim(),
               password: _passwordController.text,
@@ -137,13 +138,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('Account created successfully! Please sign in.'),
+                  content: Text('Verification code sent to your email!'),
                   backgroundColor: HestiaColors.primary,
                 ),
               );
-              setState(() {
-                _isSignIn = true;
-              });
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => OtpScreen.email(
+                    email: _emailController.text.trim(),
+                  ),
+                ),
+              );
             }
           } else {
             SupabaseService.pendingSignUpName = _nameController.text.trim();

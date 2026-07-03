@@ -35,10 +35,10 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
   bool _isLoading = true;
   Timer? _debounceTimer;
 
-  // Saved address state loaded from DB
   Map<String, dynamic>? _dbAddress;
-  String _phone = '8144684265';
+  String _phone = '';
   bool _useFallbackMock = true;
+  List<Map<String, dynamic>> _savedAddresses = [];
 
   @override
   void initState() {
@@ -56,57 +56,69 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
   Future<void> _loadAddress() async {
     final user = SupabaseService.currentUser;
     if (user != null) {
-      setState(() {
-        _isLoading = true;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = true;
+        });
+      }
       try {
-        Map<String, dynamic>? data = await SupabaseService.getUserProfile(user.id);
-        if (data == null || data['address'] == null) {
-          data = await SupabaseService.downloadProfileJson(user.id);
-        }
-        final profileData = data;
-        if (profileData != null && profileData['address'] != null) {
-          final Map<String, dynamic> address = Map<String, dynamic>.from(profileData['address']);
-          final flat = address['flat'] ?? '';
-          final street = address['street'] ?? '';
-          final city = address['city'] ?? '';
-          final pincode = address['pincode'] ?? address['pin_code'] ?? '';
-          
-          if (flat.toString().isNotEmpty || street.toString().isNotEmpty || city.toString().isNotEmpty || pincode.toString().isNotEmpty) {
-            setState(() {
-              _dbAddress = address;
-              _phone = profileData['phone'] ?? user.phone ?? user.userMetadata?['phone'] ?? '8144684265';
+        final addresses = await SupabaseService.getUserAddresses(user.id);
+        if (mounted) {
+          setState(() {
+            _savedAddresses = addresses;
+            if (addresses.isNotEmpty) {
+              final primaryAddress = addresses.firstWhere((a) => a['is_primary'] == true, orElse: () => addresses.first);
+              _dbAddress = primaryAddress;
               _useFallbackMock = false;
-            });
-          }
+            } else {
+              _dbAddress = null;
+              _useFallbackMock = true;
+            }
+          });
+        }
+
+        // Also fetch user profile details to resolve phone if needed
+        Map<String, dynamic>? profileData = await SupabaseService.getUserProfile(user.id);
+        if (profileData != null && mounted) {
+          setState(() {
+            _phone = profileData['phone'] ?? user.phone ?? user.userMetadata?['phone'] ?? '';
+          });
         }
       } catch (e) {
         debugPrint('Error loading address: $e');
       }
     }
-    setState(() {
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   void _onSearchChanged(String query) {
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 600), () async {
       if (query.trim().isEmpty) {
-        setState(() {
-          _searchResults = [];
-          _isSearching = false;
-        });
+        if (mounted) {
+          setState(() {
+            _searchResults = [];
+            _isSearching = false;
+          });
+        }
         return;
       }
-      setState(() {
-        _isSearching = true;
-      });
+      if (mounted) {
+        setState(() {
+          _isSearching = true;
+        });
+      }
       final results = await _searchPlaces(query);
-      setState(() {
-        _searchResults = results;
-        _isSearching = false;
-      });
+      if (mounted) {
+        setState(() {
+          _searchResults = results;
+          _isSearching = false;
+        });
+      }
     });
   }
 
@@ -484,178 +496,309 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 28),
+                if (_savedAddresses.isNotEmpty) ...[
+                  const SizedBox(height: 28),
 
-                // SAVED ADDRESSES header
-                const Text(
-                  'SAVED ADDRESSES',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF6F4E37),
-                    letterSpacing: 1.2,
+                  // SAVED ADDRESSES header
+                  const Text(
+                    'SAVED ADDRESSES',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF6F4E37),
+                      letterSpacing: 1.2,
+                    ),
                   ),
-                ),
 
-                const SizedBox(height: 12),
+                  const SizedBox(height: 12),
 
-                // Saved Address Card - liquid glass tinted brown for off-white end of gradient
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20.0),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF5ECE3).withValues(alpha: 0.85),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: const Color(0xFFE6D5C5).withValues(alpha: 0.9),
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Location Pin badge (brown tinted glass container)
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFE6D5C5).withValues(alpha: 0.4),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(
-                              Icons.location_on_outlined,
-                              color: Color(0xFF6F4E37),
-                              size: 24,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          
-                          // Address Details
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
+                  Column(
+                    children: _savedAddresses.map((address) {
+                      final flatVal = address['flat'] ?? '';
+                      final label = SupabaseService.getAddressLabel(flatVal);
+                      final cleanFlat = SupabaseService.cleanFlatName(flatVal);
+                      
+                      final street = address['street'] ?? '';
+                      final city = address['city'] ?? '';
+                      final pin = address['pin_code'] ?? address['pincode'] ?? '';
+                      final isPrimary = _dbAddress != null && address['id'] == _dbAddress!['id'];
+
+                      List<String> parts = [];
+                      if (cleanFlat.isNotEmpty) parts.add(cleanFlat);
+                      if (street.isNotEmpty) parts.add(street);
+                      if (city.isNotEmpty) parts.add(city);
+                      parts.add("India");
+                      if (pin.toString().isNotEmpty) parts.add(pin.toString());
+                      final currentAddressText = "${parts.join(", ")},";
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
+                            child: GestureDetector(
+                              onTap: () async {
+                                final user = SupabaseService.currentUser;
+                                if (user != null && !isPrimary) {
+                                  setState(() {
+                                    _isLoading = true;
+                                  });
+                                  await SupabaseService.setPrimaryAddress(user.id, address['id'] as String);
+                                  await _loadAddress();
+                                }
+                              },
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(20.0),
+                                decoration: BoxDecoration(
+                                  color: isPrimary
+                                      ? const Color(0xFFF5ECE3).withValues(alpha: 0.9)
+                                      : const Color(0xFFF5ECE3).withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: isPrimary
+                                        ? const Color(0xFFD4BCA2)
+                                        : const Color(0xFFE6D5C5).withValues(alpha: 0.6),
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text(
-                                      'Home',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                        color: Color(0xFF5E3D1D),
+                                    // Location Pin / Home / Work badge (brown tinted glass container)
+                                    Container(
+                                      width: 44,
+                                      height: 44,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFE6D5C5).withValues(alpha: 0.4),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: Icon(
+                                        label == 'Home'
+                                            ? Icons.home_outlined
+                                            : (label == 'Work' ? Icons.work_outline : Icons.location_on_outlined),
+                                        color: const Color(0xFF6F4E37),
+                                        size: 24,
                                       ),
                                     ),
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFFAF2EB),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Text(
-                                        'Currently selected',
-                                        style: TextStyle(
-                                          color: HestiaColors.primary,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                                    const SizedBox(width: 16),
+                                    
+                                    // Address Details
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            crossAxisAlignment: CrossAxisAlignment.center,
+                                            children: [
+                                              Text(
+                                                label ?? 'Address',
+                                                style: const TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Color(0xFF5E3D1D),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              if (isPrimary)
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(0xFFFAF2EB),
+                                                    borderRadius: BorderRadius.circular(8),
+                                                  ),
+                                                  child: const Text(
+                                                    'Currently selected',
+                                                    style: TextStyle(
+                                                      color: HestiaColors.primary,
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ),
+                                              const Spacer(),
+                                              PopupMenuButton<String>(
+                                                icon: const Icon(
+                                                  Icons.more_vert,
+                                                  color: Color(0xFF6F4E37),
+                                                  size: 20,
+                                                ),
+                                                padding: EdgeInsets.zero,
+                                                constraints: const BoxConstraints(
+                                                  minWidth: 150,
+                                                ),
+                                                onSelected: (value) async {
+                                                  final user = SupabaseService.currentUser;
+                                                  if (user == null) return;
+
+                                                  if (value == 'edit') {
+                                                    Navigator.of(context).push(
+                                                      MaterialPageRoute(
+                                                        builder: (context) => ConfirmLocationScreen(
+                                                          editMode: true,
+                                                          initialAddress: {
+                                                            'flat': cleanFlat,
+                                                            'street': street,
+                                                            'city': city,
+                                                            'pincode': pin,
+                                                          },
+                                                          initialCoords: const LatLng(28.6139, 77.2090),
+                                                          isPostSignInJourney: widget.isPostSignInJourney,
+                                                          primaryReason: widget.primaryReason,
+                                                          members: widget.members,
+                                                        ),
+                                                      ),
+                                                    ).then((_) => _loadAddress());
+                                                  } else if (value == 'home') {
+                                                    setState(() {
+                                                      _isLoading = true;
+                                                    });
+                                                    final newLabel = label == 'Home' ? null : 'Home';
+                                                    await SupabaseService.setAddressLabel(user.id, address['id'] as String, newLabel);
+                                                    await _loadAddress();
+                                                  } else if (value == 'work') {
+                                                    setState(() {
+                                                      _isLoading = true;
+                                                    });
+                                                    final newLabel = label == 'Work' ? null : 'Work';
+                                                    await SupabaseService.setAddressLabel(user.id, address['id'] as String, newLabel);
+                                                    await _loadAddress();
+                                                  } else if (value == 'delete') {
+                                                    final confirm = await showDialog<bool>(
+                                                      context: context,
+                                                      builder: (context) => AlertDialog(
+                                                        title: const Text('Delete Address'),
+                                                        content: const Text('Are you sure you want to delete this saved address?'),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () => Navigator.pop(context, false),
+                                                            child: const Text('Cancel'),
+                                                          ),
+                                                          TextButton(
+                                                            onPressed: () => Navigator.pop(context, true),
+                                                            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    if (confirm == true) {
+                                                      setState(() {
+                                                        _isLoading = true;
+                                                      });
+                                                      await SupabaseService.deleteAddress(address['id'] as String);
+                                                      await _loadAddress();
+                                                    }
+                                                  }
+                                                },
+                                                itemBuilder: (context) => [
+                                                  const PopupMenuItem<String>(
+                                                    value: 'edit',
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(Icons.edit_outlined, size: 18, color: Color(0xFF6F4E37)),
+                                                        SizedBox(width: 8),
+                                                        Text('Edit Address'),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  PopupMenuItem<String>(
+                                                    value: 'home',
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          label == 'Home' ? Icons.home : Icons.home_outlined,
+                                                          size: 18,
+                                                          color: const Color(0xFF6F4E37),
+                                                        ),
+                                                        const SizedBox(width: 8),
+                                                        Text(label == 'Home' ? 'Remove Home Label' : 'Mark as Home'),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  PopupMenuItem<String>(
+                                                    value: 'work',
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(
+                                                          label == 'Work' ? Icons.work : Icons.work_outline,
+                                                          size: 18,
+                                                          color: const Color(0xFF6F4E37),
+                                                        ),
+                                                        const SizedBox(width: 8),
+                                                        Text(label == 'Work' ? 'Remove Work Label' : 'Mark as Work'),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  const PopupMenuItem<String>(
+                                                    value: 'delete',
+                                                    child: Row(
+                                                      children: [
+                                                        Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                                        SizedBox(width: 8),
+                                                        Text(
+                                                          'Delete Address',
+                                                          style: TextStyle(color: Colors.redAccent),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Text(
+                                            currentAddressText,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: Color(0xFF6F4E37),
+                                              height: 1.45,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            'Mobile: $_phone',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: Color(0xFF6F4E37),
+                                            ),
+                                          ),
+                                          if (widget.isPostSignInJourney && isPrimary) ...[
+                                            const SizedBox(height: 16),
+                                            GestureDetector(
+                                              onTap: () => _confirmExistingAddress(context, currentAddressText),
+                                              child: Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                                decoration: BoxDecoration(
+                                                  color: HestiaColors.primary,
+                                                  borderRadius: BorderRadius.circular(8),
+                                                ),
+                                                child: const Text(
+                                                  'CONFIRM & CONTINUE',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.white,
+                                                    letterSpacing: 0.5,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
                                       ),
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  addressText,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: Color(0xFF6F4E37),
-                                    height: 1.45,
-                                  ),
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  'Mobile: $_phone',
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: Color(0xFF6F4E37),
-                                  ),
-                                ),
-                                const SizedBox(height: 14),
-                                
-                                 // Action Buttons (EDIT / CONFIRM & CONTINUE)
-                                 Row(
-                                   children: [
-                                     GestureDetector(
-                                       onTap: () {
-                                         final initialAddr = _useFallbackMock
-                                             ? {
-                                                 'flat': '89, Usuw',
-                                                 'street': 'Pocket 25, Pocket 25, Bharat singh, Pista',
-                                                 'city': 'New Delhi, Delhi',
-                                                 'pincode': '110085',
-                                               }
-                                             : _dbAddress;
-
-                                         LatLng? initialCoords;
-                                         if (!_useFallbackMock && _dbAddress != null) {
-                                           // Centering on default coordinates
-                                         } else {
-                                           initialCoords = const LatLng(28.6139, 77.2090);
-                                         }
-                                             
-                                         Navigator.of(context).push(
-                                           MaterialPageRoute(
-                                             builder: (context) => ConfirmLocationScreen(
-                                               editMode: true,
-                                               initialAddress: initialAddr,
-                                               initialCoords: initialCoords,
-                                               isPostSignInJourney: widget.isPostSignInJourney,
-                                               primaryReason: widget.primaryReason,
-                                               members: widget.members,
-                                             ),
-                                           ),
-                                         ).then((_) => _loadAddress());
-                                       },
-                                       child: const Text(
-                                         'EDIT',
-                                         style: TextStyle(
-                                           fontSize: 13,
-                                           fontWeight: FontWeight.bold,
-                                           color: HestiaColors.primary,
-                                           letterSpacing: 0.5,
-                                         ),
-                                       ),
-                                     ),
-                                     if (widget.isPostSignInJourney) ...[
-                                       const SizedBox(width: 24),
-                                       GestureDetector(
-                                         onTap: () => _confirmExistingAddress(context, addressText),
-                                         child: const Text(
-                                           'CONFIRM & CONTINUE',
-                                           style: TextStyle(
-                                             fontSize: 13,
-                                             fontWeight: FontWeight.bold,
-                                             color: HestiaColors.primary,
-                                             letterSpacing: 0.5,
-                                           ),
-                                         ),
-                                       ),
-                                     ],
-                                   ],
-                                 ),
-                              ],
+                              ),
                             ),
                           ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    }).toList(),
                   ),
-                ),
+                ],
               ],
             ),
           );
@@ -675,7 +818,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
     final user = SupabaseService.currentUser;
     if (user != null) {
       final fullName = user.userMetadata?['full_name'] ?? 'User';
-      final phone = user.userMetadata?['phone'] ?? user.phone ?? _phone;
+      final phone = user.phone ?? user.userMetadata?['phone'] ?? (_phone.isNotEmpty ? _phone : null);
       final email = user.userMetadata?['email'] ?? user.email ?? '';
 
       final addressToSave = _useFallbackMock || _dbAddress == null

@@ -123,8 +123,8 @@ class ServiceDetailScreen extends StatefulWidget {
       ],
       faqs: [
         ServiceFAQ(
-          question: 'Are the caregivers certified?',
-          answer: 'Yes, all our postpartum caregivers are certified professionals with nursing or maternal care backgrounds, thoroughly verified.',
+          question: 'Are the professionals certified?',
+          answer: 'Yes, all our postpartum professionals are certified with nursing or maternal care backgrounds, thoroughly verified.',
         ),
         ServiceFAQ(
           question: 'Can I book for a full day?',
@@ -250,7 +250,7 @@ class ServiceDetailScreen extends StatefulWidget {
         ),
         ServiceFAQ(
           question: 'Is support available for wheelchair users?',
-          answer: 'Yes, our caregivers are trained in safe wheelchair transfers and navigation techniques.',
+          answer: 'Yes, our professionals are trained in safe wheelchair transfers and navigation techniques.',
         ),
         ServiceFAQ(
           question: 'Can this be booked daily?',
@@ -366,11 +366,11 @@ class ServiceDetailScreen extends StatefulWidget {
       faqs: [
         ServiceFAQ(
           question: 'How do you ensure client privacy?',
-          answer: 'Our caregivers are highly trained to maintain client dignity by using cover-ups and professional care protocols.',
+          answer: 'Our professionals are highly trained to maintain client dignity by using cover-ups and professional care protocols.',
         ),
         ServiceFAQ(
           question: 'What if the bathroom is not elder-friendly?',
-          answer: 'During the first visit, our caregiver will suggest simple safety adjustments (like anti-slip mats).',
+          answer: 'During the first visit, our professional will suggest simple safety adjustments (like anti-slip mats).',
         ),
         ServiceFAQ(
           question: 'Do you provide soaps and shampoo?',
@@ -431,11 +431,11 @@ class ServiceDetailScreen extends StatefulWidget {
         ),
         ServiceFAQ(
           question: 'Can you drive my parents to the doctor?',
-          answer: 'We can accompany them in a cab or walk with them, but our caregivers do not drive personal vehicles for liability reasons.',
+          answer: 'We can accompany them in a cab or walk with them, but our professionals do not drive personal vehicles for liability reasons.',
         ),
         ServiceFAQ(
           question: 'Is there a weight limit for grocery bags?',
-          answer: 'Yes, our caregivers can carry standard grocery bags up to 10kg.',
+          answer: 'Yes, our professionals can carry standard grocery bags up to 10kg.',
         ),
       ],
     ),

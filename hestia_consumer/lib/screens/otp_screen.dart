@@ -23,26 +23,36 @@ class OtpScreen extends StatefulWidget {
   final String contactInfo;
   final OtpVerificationType verificationType;
 
+  /// Optional callback invoked after successful verification.
+  /// When provided, this is called instead of the default post-auth navigation.
+  /// Use this when launching OtpScreen from contexts like the profile screen
+  /// where you want to control navigation yourself (e.g. just pop back).
+  final VoidCallback? onVerified;
+
   const OtpScreen({
     super.key,
     required this.contactInfo,
     required this.verificationType,
+    this.onVerified,
   });
 
   /// Convenience constructor for phone OTP
   const OtpScreen.phone({super.key, required String phoneNumber})
       : contactInfo = phoneNumber,
-        verificationType = OtpVerificationType.phoneSms;
+        verificationType = OtpVerificationType.phoneSms,
+        onVerified = null;
 
   /// Convenience constructor for email sign-up OTP
   const OtpScreen.email({super.key, required String email})
       : contactInfo = email,
-        verificationType = OtpVerificationType.emailSignUp;
+        verificationType = OtpVerificationType.emailSignUp,
+        onVerified = null;
 
   /// Convenience constructor for email sign-in OTP
   const OtpScreen.emailSignIn({super.key, required String email})
       : contactInfo = email,
-        verificationType = OtpVerificationType.emailSignIn;
+        verificationType = OtpVerificationType.emailSignIn,
+        onVerified = null;
 
   @override
   State<OtpScreen> createState() => _OtpScreenState();
@@ -104,7 +114,11 @@ class _OtpScreenState extends State<OtpScreen> {
 
     try {
       if (widget.verificationType == OtpVerificationType.phoneSms) {
-        await SupabaseService.signInWithOtp(phone: widget.contactInfo);
+        if (SupabaseService.currentUser != null) {
+          await SupabaseService.sendPhoneVerificationOtp(phone: widget.contactInfo);
+        } else {
+          await SupabaseService.signInWithOtp(phone: widget.contactInfo);
+        }
       } else if (widget.verificationType == OtpVerificationType.emailSignIn) {
         await SupabaseService.resendSignInEmailOtp(email: widget.contactInfo);
       } else {
@@ -241,7 +255,12 @@ class _OtpScreenState extends State<OtpScreen> {
             ),
           );
         }
-        await _handlePostAuthNavigation();
+        if (widget.onVerified != null) {
+          // Caller controls navigation (e.g. profile screen → just pop back)
+          widget.onVerified!();
+        } else {
+          await _handlePostAuthNavigation();
+        }
       }
     } on AuthException catch (e) {
       if (mounted) {

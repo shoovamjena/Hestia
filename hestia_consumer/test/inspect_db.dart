@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:hestia_consumer_app/config/supabase_config.dart';
+import 'package:hestia_consumer_app/services/supabase_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -18,25 +19,44 @@ void main() {
     });
   });
 
-  test('scan addresses table for hub_id', () async {
+  test('scan professionals table authenticated', () async {
     await Supabase.initialize(
       url: SupabaseConfig.url,
       publishableKey: SupabaseConfig.anonKey,
     );
     final client = Supabase.instance.client;
 
+    final uniqueId = DateTime.now().millisecondsSinceEpoch;
+    final testEmail = 'inspect_profs_$uniqueId@hestia.com';
+    final testPhone = '+919${uniqueId.toString().substring(uniqueId.toString().length - 9)}';
+    final testPassword = 'testpassword123';
+    final testName = 'Inspect User';
+
     try {
-      print('Querying addresses table...');
-      final addresses = await client.from('addresses').select('id, user_id, hub_id').limit(20);
-      print('Addresses list: $addresses');
-      
-      final nonNullHub = addresses.firstWhere(
-        (a) => a['hub_id'] != null,
-        orElse: () => <String, dynamic>{},
+      print('Registering test user: $testEmail');
+      await SupabaseService.signUp(
+        email: testEmail,
+        password: testPassword,
+        name: testName,
+        phone: testPhone,
       );
-      print('Found address with non-null hub: $nonNullHub');
+
+      print('Authenticating via verifyEmailSignUp...');
+      await SupabaseService.verifyEmailSignUp(email: testEmail, token: '123456');
+
+      print('Querying professionals table with authenticated session...');
+      final profs = await client.from('professionals').select('*');
+      print('Authenticated Professionals list: $profs');
+
+      // Cleanup
+      final user = client.auth.currentUser;
+      if (user != null) {
+        await client.from('users').delete().eq('id', user.id);
+      }
     } catch (e) {
-      print('Error querying addresses: $e');
+      print('Error during authenticated scan: $e');
+    } finally {
+      await client.auth.signOut();
     }
   });
 }

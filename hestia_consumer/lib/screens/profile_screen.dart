@@ -1133,7 +1133,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildPhoneVerificationBadge() {
-    if (_phone.isEmpty) return const SizedBox.shrink();
+    if (_phone.isEmpty) {
+      return GestureDetector(
+        onTap: _showEditPersonalDetailsDialog,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: HestiaColors.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: HestiaColors.primary.withValues(alpha: 0.3), width: 1.0),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.add_rounded, color: HestiaColors.primary, size: 14),
+              SizedBox(width: 4),
+              Text(
+                'Add Phone',
+                style: TextStyle(
+                  color: HestiaColors.primary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     
     if (_isPhoneVerified) {
       return Container(
@@ -1203,7 +1230,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     
     try {
       final phone = _phone.startsWith('+') ? _phone : '+91${_phone.replaceAll(' ', '')}';
-      await SupabaseService.signInWithOtp(phone: phone);
+      if (SupabaseService.currentUser != null) {
+        await SupabaseService.sendPhoneVerificationOtp(phone: phone);
+      } else {
+        await SupabaseService.signInWithOtp(phone: phone);
+      }
       if (mounted) {
         Navigator.pop(context); // Close loading indicator
         // Navigate to OTP screen for phone verification
@@ -1212,12 +1243,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
             builder: (context) => OtpScreen(
               contactInfo: phone,
               verificationType: OtpVerificationType.phoneSms,
+              onVerified: () {
+                // Pop the OTP screen back to the profile screen
+                Navigator.of(context).pop();
+                // Reload profile data to reflect the newly verified status
+                _loadProfileData();
+              },
             ),
           ),
-        ).then((_) {
-          // Re-load profile data when returning to check if phone is verified
-          _loadProfileData();
-        });
+        );
       }
     } catch (e) {
       if (mounted) {

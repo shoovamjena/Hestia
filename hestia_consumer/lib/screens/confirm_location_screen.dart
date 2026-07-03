@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -53,7 +54,40 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   String _hubName = 'Koramangala Hub';
   String _hubZone = 'South Bengaluru hub';
   String _hubEst = 'Within 24 hrs';
-  bool _isUpdatingFromMap = false;
+  bool _isWithinCoverage = true;
+  List<Map<String, dynamic>> _dbHubs = [];
+
+  final List<Map<String, dynamic>> _mockHubs = const [
+    {
+      'name': 'Koramangala Hub',
+      'latitude': 12.9345,
+      'longitude': 77.6258,
+      'zone': 'South Bengaluru hub',
+      'est': 'Within 24 hrs',
+    },
+    {
+      'name': 'Delhi Hub',
+      'latitude': 28.6139,
+      'longitude': 77.2090,
+      'zone': 'New Delhi hub',
+      'est': 'Within 12 hrs',
+    },
+    {
+      'name': 'Bellandur Hub',
+      'latitude': 12.9304,
+      'longitude': 77.6784,
+      'zone': 'East Bengaluru hub',
+      'est': 'Within 12 hrs',
+    },
+    {
+      'name': 'Whitefield Hub',
+      'latitude': 12.9698,
+      'longitude': 77.7499,
+      'zone': 'East Bengaluru hub',
+      'est': 'Within 24 hrs',
+    },
+  ];
+
   bool _isMapEnlarged = false;
 
   final List<String> _localCities = const [
@@ -74,6 +108,8 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   void initState() {
     super.initState();
 
+    _fetchHubsFromDb();
+
     // Pre-populate fields if initialAddress is provided
     if (widget.initialAddress != null) {
       _flatController.text = widget.initialAddress!['flat'] ?? '';
@@ -85,10 +121,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     if (widget.initialCoords != null) {
       _currentMapPosition = widget.initialCoords!;
       _isLoading = false;
-      final nearest = _findNearestLocation(_currentMapPosition.latitude, _currentMapPosition.longitude);
-      _hubName = nearest['name']!;
-      _hubZone = nearest['zone']!;
-      _hubEst = nearest['est']!;
+      _updateNearestHub(_currentMapPosition.latitude, _currentMapPosition.longitude);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         try {
           _mapController.move(_currentMapPosition, 16.0);
@@ -105,10 +138,6 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
       });
     }
 
-    _flatController.addListener(_onAddressFieldsChanged);
-    _streetController.addListener(_onAddressFieldsChanged);
-    _cityController.addListener(_onAddressFieldsChanged);
-    _pincodeController.addListener(_onAddressFieldsChanged);
   }
 
   @override
@@ -119,14 +148,6 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     _pincodeController.dispose();
     _debounceTimer?.cancel();
     super.dispose();
-  }
-
-  void _onAddressFieldsChanged() {
-    if (_isUpdatingFromMap) return;
-    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 1500), () {
-      _geocodeAddressFields();
-    });
   }
 
   Future<void> _geocodeAddressFields() async {
@@ -145,18 +166,15 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
 
     if (point != null) {
       final actualPoint = point;
-      setState(() {
-        _currentMapPosition = actualPoint;
-        final nearest = _findNearestLocation(actualPoint.latitude, actualPoint.longitude);
-        _hubName = nearest['name']!;
-        _hubZone = nearest['zone']!;
-        _hubEst = nearest['est']!;
-      });
+      if (mounted) {
+        setState(() {
+          _currentMapPosition = actualPoint;
+        });
+      }
+      _updateNearestHub(actualPoint.latitude, actualPoint.longitude);
       try {
         _mapController.move(actualPoint, 16.0);
       } catch (_) {}
-      
-      // Auto-update the rest of the fields by reverse geocoding the resolved coordinate
       await _reverseGeocodeCenter(actualPoint.latitude, actualPoint.longitude);
     }
   }
@@ -248,9 +266,11 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
       );
 
       final point = LatLng(position.latitude, position.longitude);
-      setState(() {
-        _currentMapPosition = point;
-      });
+      if (mounted) {
+        setState(() {
+          _currentMapPosition = point;
+        });
+      }
       try {
         _mapController.move(point, 16.0);
       } catch (_) {}
@@ -258,19 +278,23 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     } catch (e) {
       _useFallbackDefault("Error fetching GPS location: $e");
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   void _useFallbackDefault(String warning) {
     debugPrint(warning);
     final fallbackPoint = const LatLng(19.3150, 84.7940);
-    setState(() {
-      _currentMapPosition = fallbackPoint;
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _currentMapPosition = fallbackPoint;
+        _isLoading = false;
+      });
+    }
     try {
       _mapController.move(fallbackPoint, 16.0);
     } catch (_) {}
@@ -303,12 +327,14 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   }
 
   void _onMapPositionChanged(MapCamera camera, bool hasGesture) {
-    if (!hasGesture) return;
     final center = camera.center;
 
     setState(() {
       _currentMapPosition = center;
     });
+    _updateNearestHub(center.latitude, center.longitude);
+
+    if (!hasGesture) return;
 
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 1000), () {
@@ -317,9 +343,12 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   }
 
   void _updateLocation(LatLng point) {
-    setState(() {
-      _currentMapPosition = point;
-    });
+    if (mounted) {
+      setState(() {
+        _currentMapPosition = point;
+      });
+    }
+    _updateNearestHub(point.latitude, point.longitude);
     try {
       _mapController.move(point, 16.0);
     } catch (_) {}
@@ -351,7 +380,6 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
         final city = addressData['city'] ?? '';
         final pincode = addressData['pincode'] ?? '';
 
-        _isUpdatingFromMap = true;
         // Don't fill flat number field with general address text
         if (_flatController.text.isEmpty && flat.isNotEmpty) {
           _flatController.text = flat;
@@ -359,13 +387,9 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
         _streetController.text = street;
         _cityController.text = city;
         _pincodeController.text = pincode;
-        _isUpdatingFromMap = false;
 
-        final nearest = _findNearestLocation(lat, lng);
-        _hubName = nearest['name']!;
-        _hubZone = nearest['zone']!;
-        _hubEst = nearest['est']!;
       });
+      _updateNearestHub(lat, lng);
     }
   }
 
@@ -516,6 +540,82 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     return nearest;
   }
 
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const p = 0.017453292519943295; // Math.PI / 180
+    final a = 0.5 - cos((lat2 - lat1) * p)/2 + 
+          cos(lat1 * p) * cos(lat2 * p) * 
+          (1 - cos((lon2 - lon1) * p))/2;
+    return 12742 * asin(sqrt(a)); // 2 * R; R = 6371 km
+  }
+
+  void _updateNearestHub(double lat, double lng) {
+    final hubs = _dbHubs.isNotEmpty ? _dbHubs : _mockHubs;
+    if (hubs.isEmpty) return;
+
+    Map<String, dynamic> nearest = hubs[0];
+    double minDistance = double.infinity;
+
+    for (final hub in hubs) {
+      final double hubLat = double.tryParse(hub['latitude']?.toString() ?? hub['lat']?.toString() ?? '') ?? 0.0;
+      final double hubLng = double.tryParse(hub['longitude']?.toString() ?? hub['lng']?.toString() ?? '') ?? 0.0;
+      
+      final distance = _calculateDistance(lat, lng, hubLat, hubLng);
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearest = hub;
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _hubName = nearest['name'] ?? 'Local Hub';
+        _hubZone = nearest['zone'] ?? nearest['address'] ?? 'Local coverage zone';
+        _hubEst = nearest['est'] ?? 'Within 24 hrs';
+        _isWithinCoverage = minDistance <= 50.0;
+      });
+    }
+  }
+
+  Future<void> _fetchHubsFromDb() async {
+    try {
+      final List<dynamic> response = await SupabaseService.client
+          .from('hubs')
+          .select('id, name, latitude, longitude, address');
+      
+      final List<Map<String, dynamic>> fetchedHubs = [];
+      for (final item in response) {
+        final hub = Map<String, dynamic>.from(item);
+        double? lat = double.tryParse(hub['latitude']?.toString() ?? '');
+        double? lng = double.tryParse(hub['longitude']?.toString() ?? '');
+        
+        if (lat == null || lng == null || (lat == 0.0 && lng == 0.0)) {
+          final query = hub['address']?.toString() ?? hub['name']?.toString() ?? '';
+          if (query.isNotEmpty) {
+            LatLng? point;
+            if (MapboxConfig.accessToken.isNotEmpty) {
+              point = await _geocodeAddressFieldsMapbox(query);
+            }
+            point ??= await _geocodeAddressFieldsOSM(query);
+            if (point != null) {
+              hub['latitude'] = point.latitude;
+              hub['longitude'] = point.longitude;
+            }
+          }
+        }
+        fetchedHubs.add(hub);
+      }
+
+      if (mounted) {
+        setState(() {
+          _dbHubs = fetchedHubs;
+          _updateNearestHub(_currentMapPosition.latitude, _currentMapPosition.longitude);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching hubs: $e');
+    }
+  }
+
   Future<void> _saveAddress() async {
     final street = _streetController.text.trim();
     final city = _cityController.text.trim();
@@ -548,10 +648,9 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
           'city': _cityController.text.trim(),
           'pincode': _pincodeController.text.trim(),
         };
-
         if (widget.isPostSignInJourney) {
           final fullName = user.userMetadata?['full_name'] ?? 'User';
-          final phone = user.userMetadata?['phone'] ?? user.phone ?? '8144684265';
+          final phone = user.phone ?? user.userMetadata?['phone'];
           final email = user.userMetadata?['email'] ?? user.email ?? '';
 
           await SupabaseService.saveUserProfile(
@@ -883,7 +982,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
                                           controller: _cityController,
                                           placeholder: 'e.g. Bengaluru',
                                           onSearch: (query) => searchCities(query),
-                                          onSelected: () => _geocodeAddressFields(),
+                                          onSelected: () {},
                                         ),
                                       ],
                                     ),
@@ -901,49 +1000,117 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
                                   ),
                                 ],
                               ),
+                              const SizedBox(height: 16),
+                              Center(
+                                child: TextButton.icon(
+                                  onPressed: () {
+                                    FocusScope.of(context).unfocus();
+                                    _geocodeAddressFields();
+                                  },
+                                  icon: const Icon(Icons.sync_rounded, size: 18, color: HestiaColors.primary),
+                                  label: const Text(
+                                    'Sync Address to Map Pin',
+                                    style: TextStyle(
+                                      fontFamily: 'Outfit',
+                                      fontWeight: FontWeight.w600,
+                                      color: HestiaColors.primary,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                    backgroundColor: HestiaColors.primary.withValues(alpha: 0.08),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      side: BorderSide(color: HestiaColors.primary.withValues(alpha: 0.15)),
+                                    ),
+                                  ),
+                                ),
+                              ),
                               const SizedBox(height: 24),
 
-                              // Coverage banner
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF2FAE9).withValues(alpha: 0.9),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: const Color(0xFFB7DDA3)),
-                                ),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Icon(Icons.check_circle_rounded, color: Color(0xFF8BC34A), size: 20),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
+                              // Coverage / Out of coverage banner
+                              _isWithinCoverage
+                                  ? Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFF2FAE9).withValues(alpha: 0.9),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(color: const Color(0xFFB7DDA3)),
+                                      ),
+                                      child: Row(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          Text(
-                                            'Covered by $_hubName',
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.bold,
-                                              color: Color(0xFF3E5C2C),
+                                          const Icon(Icons.check_circle_rounded, color: Color(0xFF8BC34A), size: 20),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  'Covered by $_hubName',
+                                                  style: const TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Color(0xFF3E5C2C),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'Great news! Your address falls within our $_hubZone coverage zone. Services available: $_hubEst.',
+                                                  style: const TextStyle(
+                                                    fontSize: 13,
+                                                    color: Color(0xFF3E5C2C),
+                                                    height: 1.4,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'Great news! Your address falls within our $_hubZone coverage zone. Services available: $_hubEst.',
-                                            style: const TextStyle(
-                                              fontSize: 13,
-                                              color: Color(0xFF3E5C2C),
-                                              height: 1.4,
+                                        ],
+                                      ),
+                                    )
+                                  : Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFDE8E8).withValues(alpha: 0.9),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(color: const Color(0xFFE8B7B7)),
+                                      ),
+                                       child: Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Icon(Icons.info_outline, color: Colors.redAccent, size: 20),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                const Text(
+                                                  'Out of Coverage',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Color(0xFF8B3E3E),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                 const Text(
+                                                   'We are not available in your position now and will expand soon',
+                                                   style: TextStyle(
+                                                     fontSize: 13,
+                                                     color: Color(0xFF8B3E3E),
+                                                     height: 1.4,
+                                                   ),
+                                                 ),
+                                              ],
                                             ),
                                           ),
                                         ],
                                       ),
                                     ),
-                                  ],
-                                ),
-                              ),
 
                               const SizedBox(height: 24),
 
@@ -952,7 +1119,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
                                 width: double.infinity,
                                 height: 56,
                                 child: ElevatedButton(
-                                  onPressed: _saveAddress,
+                                  onPressed: _isWithinCoverage ? _saveAddress : null,
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: greenAccent,
                                     foregroundColor: Colors.white,
@@ -1087,6 +1254,11 @@ class _CityAutocompleteField extends StatefulWidget {
 
 class _CityAutocompleteFieldState extends State<_CityAutocompleteField> {
   final FocusNode _focusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+  }
 
   @override
   void dispose() {

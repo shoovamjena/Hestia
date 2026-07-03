@@ -1052,7 +1052,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Caregiver: $caregiverName',
+                        'Professional: $caregiverName',
                         style: const TextStyle(
                           fontSize: 12,
                           color: HestiaColors.textMedium,

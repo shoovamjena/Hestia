@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/colors.dart';
 import 'review_confirm_screen.dart';
 
@@ -53,58 +54,107 @@ class ChooseProfessionalScreen extends StatefulWidget {
 
 class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
   bool _isSearching = true;
+  bool _fetchError = false;
   Timer? _searchTimer;
   ProfessionalProfile? _matchedProfessional;
+  List<ProfessionalProfile> _professionals = [];
 
-  final List<ProfessionalProfile> _professionals = const [
-    ProfessionalProfile(
-      id: 'sr',
-      name: 'Sunita Rao',
-      initials: 'SR',
-      avatarBg: Color(0xFFB0927A), // Brown/tan
-      rating: '4.9',
-      sessionsCount: 128,
-      distanceKm: 3,
-      tags: ['Verified', 'Regular'],
-    ),
-    ProfessionalProfile(
-      id: 'km',
-      name: 'Kavita Menon',
-      initials: 'KM',
-      avatarBg: Color(0xFF7A9B82), // Green
-      rating: '4.7',
-      sessionsCount: 84,
-      distanceKm: 4,
-      tags: ['Verified'],
-    ),
-    ProfessionalProfile(
-      id: 'ap',
-      name: 'Anjali Pillai',
-      initials: 'AP',
-      avatarBg: Color(0xFF8C7AA5), // Purple
-      rating: '4.8',
-      sessionsCount: 211,
-      distanceKm: 5,
-      tags: ['Verified', 'Top rated'],
-    ),
+  // Deterministic avatar colours derived from a professional's DB id
+  static const List<Color> _avatarPalette = [
+    Color(0xFF7A9B82), // sage green
+    Color(0xFF8C7AA5), // muted purple
+    Color(0xFF7A8FAB), // slate blue
+    Color(0xFFAB7A7A), // dusty rose
+    Color(0xFFAB9A7A), // warm sand
+    Color(0xFF7AABA5), // teal
   ];
+
+  Color _avatarColorForId(String id) {
+    final hash = id.codeUnits.fold(0, (prev, e) => prev + e);
+    return _avatarPalette[hash % _avatarPalette.length];
+  }
+
+  String _initialsForName(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+    }
+    return name.isNotEmpty ? name[0].toUpperCase() : '?';
+  }
 
   @override
   void initState() {
     super.initState();
-    _startSearching();
+    _fetchAndSearch();
   }
 
-  void _startSearching() {
+  Future<void> _fetchAndSearch() async {
+    // Start the 4-second searching animation timer
+    final Completer<void> timerCompleter = Completer();
     _searchTimer = Timer(const Duration(milliseconds: 4000), () {
+      if (!timerCompleter.isCompleted) timerCompleter.complete();
+    });
+
+    // Fetch professionals from Supabase concurrently with the timer
+    try {
+      final response = await Supabase.instance.client
+          .from('professionals')
+          .select('id, full_name, avg_rating, total_sessions, background_check_status')
+          .order('full_name');
+
+      final fetched = (response as List).map((row) {
+        final id = row['id']?.toString() ?? '';
+        final name = row['full_name']?.toString() ?? 'Professional';
+        final ratingVal = row['avg_rating'];
+        final rating = ratingVal != null
+            ? double.tryParse(ratingVal.toString())?.toStringAsFixed(1) ?? '4.5'
+            : '4.5';
+        final sessions = row['total_sessions'] as int? ?? 0;
+        final distance = 5;
+        final isVerified = row['background_check_status']?.toString() == 'verified';
+        final isTopRated = ratingVal != null && (double.tryParse(ratingVal.toString()) ?? 0.0) >= 4.8;
+
+        final tags = <String>[
+          if (isVerified) 'Verified',
+          if (isTopRated) 'Top rated',
+        ];
+
+        return ProfessionalProfile(
+          id: id,
+          name: name,
+          initials: _initialsForName(name),
+          avatarBg: _avatarColorForId(id),
+          rating: rating,
+          sessionsCount: sessions,
+          distanceKm: distance,
+          tags: tags.isEmpty ? ['Verified'] : tags,
+        );
+      }).toList();
+
+      // Wait for the timer to complete before revealing the match
+      await timerCompleter.future;
+
       if (mounted) {
         setState(() {
           _isSearching = false;
-          // Match Sunita Rao as the professional
-          _matchedProfessional = _professionals.first;
+          if (fetched.isNotEmpty) {
+            _professionals = fetched;
+            _matchedProfessional = fetched.first;
+          } else {
+            _fetchError = true;
+          }
         });
       }
-    });
+    } catch (e) {
+      // Ensure timer still completes
+      await timerCompleter.future;
+      if (mounted) {
+        setState(() {
+          _isSearching = false;
+          _fetchError = true;
+        });
+      }
+    }
   }
 
   @override
@@ -113,34 +163,21 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
     super.dispose();
   }
 
-  // Map service title to professional roles dynamically
+  // Map service title to a role label (generic, not name-specific)
   String _getRoleForProfessional(String name) {
     final title = widget.serviceTitle.toLowerCase();
     if (title.contains('post-delivery') || title.contains('pregnancy')) {
-      if (name == 'Sunita Rao') return 'Post-Delivery Specialist';
-      if (name == 'Kavita Menon') return 'Maternal Care Worker';
-      return 'Certified Nurse Aide';
+      return 'Post-Delivery Specialist';
     } else if (title.contains('babysitting')) {
-      if (name == 'Sunita Rao') return 'Toddler Care Specialist';
-      if (name == 'Kavita Menon') return 'Babysitter Coordinator';
       return 'Infant Care Provider';
     } else if (title.contains('mobility')) {
-      if (name == 'Sunita Rao') return 'Geriatric Mobility Trainer';
-      if (name == 'Kavita Menon') return 'Elder Care Assistant';
-      return 'Physical Therapy Aide';
+      return 'Geriatric Mobility Specialist';
     } else if (title.contains('bathing')) {
-      if (name == 'Sunita Rao') return 'Personal Hygiene Specialist';
-      if (name == 'Kavita Menon') return 'Adult Care Assistant';
-      return 'Certified Nurse Aide';
+      return 'Personal Hygiene Specialist';
     } else if (title.contains('concierge')) {
-      if (name == 'Sunita Rao') return 'Home Organization Lead';
-      if (name == 'Kavita Menon') return 'Senior Errands escort';
-      return 'Concierge Coordinator';
+      return 'Concierge Care Coordinator';
     }
-    // Fallbacks
-    if (name == 'Sunita Rao') return 'Senior Care Specialist';
-    if (name == 'Kavita Menon') return 'Certified Support Caregiver';
-    return 'Home Nurse Aide';
+    return 'Senior Care Specialist';
   }
 
   // Format date helper: "Fri, Jun 12"
@@ -206,7 +243,11 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                     Expanded(
                       child: Center(
                         child: Text(
-                          _isSearching ? 'Finding caregiver...' : 'Caregiver found',
+                           _isSearching
+                               ? 'Finding professional...'
+                               : _fetchError
+                                   ? 'No professionals found'
+                                   : 'Professional found',
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -226,11 +267,13 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
               Expanded(
                 child: _isSearching
                     ? _buildSearchingLayout()
-                    : _buildFoundLayout(),
+                    : _fetchError
+                        ? _buildErrorLayout()
+                        : _buildFoundLayout(),
               ),
 
-              // Sticky Bottom Book Now Button (only shown once matched)
-              if (!_isSearching)
+              // Sticky Bottom Book Now Button (only shown once matched, not on error)
+              if (!_isSearching && !_fetchError && _matchedProfessional != null)
                 SafeArea(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20.0, 8.0, 20.0, 20.0),
@@ -359,7 +402,7 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                 const RadarPulseAnimation(color: HestiaColors.primary),
                 const SizedBox(height: 36),
                 const Text(
-                  'Finding best caregivers...',
+                  'Finding best professionals...',
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
@@ -380,6 +423,111 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
             ),
           ),
           
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorLayout() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const SizedBox(height: 20),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFDE8E8),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFFB94A4A), width: 1.5),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Color(0xFFB94A4A), size: 16),
+                SizedBox(width: 8),
+                Text(
+                  'NO PROFESSIONALS AVAILABLE',
+                  style: TextStyle(
+                    color: Color(0xFFB94A4A),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 28),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 40.0),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(color: const Color(0xFFB94A4A), width: 2),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x14000000),
+                  blurRadius: 10,
+                  offset: Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.search_off_rounded, size: 64, color: Color(0xFFD4A5A5)),
+                const SizedBox(height: 20),
+                const Text(
+                  'No professionals found',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: HestiaColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'We couldn\'t find any available professionals in your zone right now. Please try again shortly.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: HestiaColors.textMedium,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _isSearching = true;
+                      _fetchError = false;
+                      _matchedProfessional = null;
+                      _professionals = [];
+                    });
+                    _fetchAndSearch();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: HestiaColors.primary,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text(
+                      'Try again',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 24),
         ],
       ),
