@@ -33,28 +33,52 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
     super.dispose();
   }
 
-  void _submitFeedback() {
+  void _submitFeedback() async {
     final bookingId = widget.sessionData['booking_id'] ?? 'mock-session-1';
     
-    // Call service to update state
-    SupabaseService.rateSession(
-      bookingId,
-      overallRating: _overallRating,
-      punctuality: _punctualityRating,
-      professionalism: _professionalismRating,
-      qualityOfCare: _qualityRating,
-      tags: _selectedTags.toList(),
-      comment: _commentController.text.trim(),
-    );
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Feedback submitted successfully! Thank you.'),
-        backgroundColor: Color(0xFF2E6B4A),
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(color: HestiaColors.primary),
       ),
     );
 
-    Navigator.of(context).pop(true); // Return true to indicate reload needed
+    try {
+      // Call service to update state
+      await SupabaseService.rateSession(
+        bookingId,
+        overallRating: _overallRating,
+        punctuality: _punctualityRating,
+        professionalism: _professionalismRating,
+        qualityOfCare: _qualityRating,
+        tags: _selectedTags.toList(),
+        comment: _commentController.text.trim(),
+      );
+
+      if (mounted) {
+        Navigator.of(context).pop(); // pop loader
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Feedback submitted successfully! Thank you.'),
+            backgroundColor: Color(0xFF2E6B4A),
+          ),
+        );
+
+        Navigator.of(context).pop(true); // Return true to indicate reload needed
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(); // pop loader
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to submit feedback: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
   }
 
   @override

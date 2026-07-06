@@ -11,44 +11,86 @@ class ActivityLogScreen extends StatelessWidget {
     final caregiverName = bookingData['caregiver_name'] ?? 'Sunita Rao';
     final serviceTitle = bookingData['title'] ?? 'Post-Delivery Care';
 
-    // Timeline items list matching the image specifications
-    final List<Map<String, dynamic>> timelineItems = [
-      {
-        'time': '10:48',
-        'title': 'Newborn bathed and swaddled',
-        'subtitle': 'Bathing & grooming',
+    String formatTime(dynamic timeObj) {
+      if (timeObj == null) return '--:--';
+      final DateTime parsed = timeObj is DateTime 
+          ? timeObj 
+          : DateTime.parse(timeObj.toString());
+      final local = parsed.toLocal();
+      int hour = local.hour;
+      final minute = local.minute.toString().padLeft(2, '0');
+      final period = hour >= 12 ? 'PM' : 'AM';
+      if (hour > 12) hour -= 12;
+      if (hour == 0) hour = 12;
+      return '$hour:$minute $period';
+    }
+
+    final actualStartObj = bookingData['actual_start'];
+    final List<Map<String, dynamic>> timelineItems = [];
+
+    if (actualStartObj != null) {
+      final DateTime actualStart = actualStartObj is DateTime 
+          ? actualStartObj 
+          : DateTime.parse(actualStartObj.toString()).toLocal();
+      final elapsedMinutes = DateTime.now().difference(actualStart).inMinutes;
+
+      final List<Map<String, dynamic>> rawLogs = [
+        {
+          'minutesOffset': 70,
+          'title': 'Newborn bathed and swaddled',
+          'subtitle': 'Bathing & grooming',
+        },
+        {
+          'minutesOffset': 44,
+          'title': 'Breastfeeding positioning assisted',
+          'subtitle': 'Feeding support',
+        },
+        {
+          'minutesOffset': 27,
+          'title': 'Light breakfast prepared for mother',
+          'subtitle': 'Meal assistance',
+        },
+        {
+          'minutesOffset': 14,
+          'title': 'Mother rest period — Aryan monitored',
+          'subtitle': 'Rest support',
+        },
+        {
+          'minutesOffset': 0,
+          'title': 'Session started. Initial check completed',
+          'subtitle': 'Session start',
+        },
+      ];
+
+      bool firstAdded = false;
+      for (final raw in rawLogs) {
+        final offset = raw['minutesOffset'] as int;
+        if (elapsedMinutes >= offset) {
+          final logTime = actualStart.add(Duration(minutes: offset)).toLocal();
+          final hour = logTime.hour.toString().padLeft(2, '0');
+          final minute = logTime.minute.toString().padLeft(2, '0');
+
+          timelineItems.add({
+            'time': '$hour:$minute',
+            'title': raw['title'],
+            'subtitle': raw['subtitle'],
+            'isLatest': !firstAdded,
+            'isGreenDot': !firstAdded,
+          });
+          firstAdded = true;
+        }
+      }
+    }
+
+    if (timelineItems.isEmpty) {
+      timelineItems.add({
+        'time': '--:--',
+        'title': 'No activity logged yet',
+        'subtitle': 'Activity will appear here as the session progresses',
         'isLatest': true,
         'isGreenDot': true,
-      },
-      {
-        'time': '10:22',
-        'title': 'Breastfeeding positioning assisted',
-        'subtitle': 'Feeding support',
-        'isLatest': false,
-        'isGreenDot': false,
-      },
-      {
-        'time': '10:05',
-        'title': 'Light breakfast prepared for mother',
-        'subtitle': 'Meal assistance',
-        'isLatest': false,
-        'isGreenDot': false,
-      },
-      {
-        'time': '09:52',
-        'title': 'Mother rest period — Aryan monitored',
-        'subtitle': 'Rest support',
-        'isLatest': false,
-        'isGreenDot': false,
-      },
-      {
-        'time': '09:38',
-        'title': 'Session started. Initial check completed',
-        'subtitle': 'Session start',
-        'isLatest': false,
-        'isGreenDot': false,
-      },
-    ];
+      });
+    }
 
     return Container(
       decoration: const BoxDecoration(
@@ -142,7 +184,7 @@ class ActivityLogScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              '$caregiverName · 9:00 AM',
+                              '$caregiverName · ${formatTime(bookingData['actual_start'])}',
                               style: const TextStyle(
                                 fontSize: 16,
                                 color: HestiaColors.textDark,

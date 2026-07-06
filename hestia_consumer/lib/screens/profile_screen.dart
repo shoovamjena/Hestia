@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'landing_screen.dart';
@@ -45,7 +46,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Pre-populate with auth metadata
       _name = user.userMetadata?['full_name'] ?? 'User';
       _email = user.email ?? '';
-      _phone = user.phone ?? user.userMetadata?['phone'] ?? '';
+      _phone = SupabaseService.currentUserPhone;
       _isPhoneVerified = SupabaseService.isPhoneVerified();
 
       try {
@@ -309,7 +310,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _showEditPersonalDetailsDialog() {
     final nameController = TextEditingController(text: _name);
     final emailController = TextEditingController(text: _email);
-    final phoneController = TextEditingController(text: _phone);
+    String initialPhone = _phone.trim();
+    if (initialPhone.startsWith('+91')) {
+      initialPhone = initialPhone.substring(3);
+    } else if (initialPhone.startsWith('91') && initialPhone.length > 10) {
+      initialPhone = initialPhone.substring(2);
+    }
+    final phoneController = TextEditingController(text: initialPhone);
     final formKey = GlobalKey<FormState>();
 
     showDialog(
@@ -393,7 +400,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 6),
                   TextFormField(
                     controller: phoneController,
+                    keyboardType: TextInputType.phone,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(10),
+                    ],
                     decoration: InputDecoration(
+                      prefixIcon: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                        child: Text(
+                          '+91 ',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: HestiaColors.textDark,
+                          ),
+                        ),
+                      ),
+                      prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                       filled: true,
                       fillColor: Colors.grey.shade100,
                       border: OutlineInputBorder(
@@ -409,7 +433,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
                       ),
                     ),
-                    validator: (val) => val == null || val.trim().isEmpty ? 'Enter phone' : null,
+                    validator: (val) {
+                      if (val == null || val.trim().isEmpty) {
+                        return 'Enter phone';
+                      }
+                      if (val.trim().replaceAll(' ', '').length != 10) {
+                        return 'Enter a valid 10-digit number';
+                      }
+                      return null;
+                    },
                   ),
                 ],
               ),
@@ -431,7 +463,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   setState(() {
                     _name = nameController.text.trim();
                     _email = emailController.text.trim();
-                    _phone = phoneController.text.trim();
+                    String typedPhone = phoneController.text.trim().replaceAll(' ', '');
+                    if (typedPhone.isNotEmpty && !typedPhone.startsWith('+')) {
+                      typedPhone = '+91$typedPhone';
+                    }
+                    _phone = typedPhone;
                   });
                   Navigator.pop(context);
                   _saveProfileChanges();
@@ -448,145 +484,164 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _showAddMemberDialog() {
     final nameController = TextEditingController();
     final ageController = TextEditingController();
-    final roleController = TextEditingController();
+    String? selectedRole = 'Post-Delivery Care';
     final formKey = GlobalKey<FormState>();
 
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: HestiaColors.background,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text(
-            'Add Household Member',
-            style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
-          ),
-          content: Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'MEMBER NAME',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: nameController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Meera',
-                      filled: true,
-                      fillColor: Colors.grey.shade100,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                      ),
-                    ),
-                    validator: (val) => val == null || val.trim().isEmpty ? 'Enter name' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'AGE (YEARS)',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: ageController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. 68',
-                      filled: true,
-                      fillColor: Colors.grey.shade100,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                      ),
-                    ),
-                    validator: (val) {
-                      if (val == null || val.trim().isEmpty) return 'Enter age';
-                      final age = int.tryParse(val);
-                      if (age == null || age < 0) return 'Enter valid age';
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'ROLE / CARE REASON',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: roleController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Grandmother / Mobility Support',
-                      filled: true,
-                      fillColor: Colors.grey.shade100,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                      ),
-                    ),
-                    validator: (val) => val == null || val.trim().isEmpty ? 'Enter role/reason' : null,
-                  ),
-                ],
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: HestiaColors.background,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text(
+                'Add Household Member',
+                style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
               ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: HestiaColors.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              content: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'MEMBER NAME',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
+                      ),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: nameController,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. Meera',
+                          filled: true,
+                          fillColor: Colors.grey.shade100,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                          ),
+                        ),
+                        validator: (val) => val == null || val.trim().isEmpty ? 'Enter name' : null,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'AGE (YEARS)',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
+                      ),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: ageController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. 68',
+                          filled: true,
+                          fillColor: Colors.grey.shade100,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                          ),
+                        ),
+                        validator: (val) {
+                          if (val == null || val.trim().isEmpty) return 'Enter age';
+                          final age = int.tryParse(val);
+                          if (age == null || age < 0) return 'Enter valid age';
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'SERVICE PREFERRED',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
+                      ),
+                      const SizedBox(height: 6),
+                      DropdownButtonFormField<String>(
+                        value: selectedRole,
+                        hint: const Text('Select service preferred'),
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: Colors.grey.shade100,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey.shade300),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                          ),
+                        ),
+                        items: [
+                          'Post-Delivery Care',
+                          'Mobility Support',
+                          'Elder Care',
+                          'Babysitting',
+                          'Other',
+                        ].map((val) => DropdownMenuItem(
+                          value: val,
+                          child: Text(val),
+                        )).toList(),
+                        onChanged: (val) {
+                          setDialogState(() {
+                            selectedRole = val;
+                          });
+                        },
+                        validator: (val) => val == null ? 'Select service preferred' : null,
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
-                  final age = int.parse(ageController.text);
-                  setState(() {
-                    _members.add({
-                      'name': nameController.text.trim(),
-                      'age': age,
-                      'role': roleController.text.trim(),
-                    });
-                  });
-                  Navigator.pop(context);
-                  _saveProfileChanges();
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: HestiaColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    if (formKey.currentState!.validate()) {
+                      final age = int.parse(ageController.text);
+                      setState(() {
+                        _members.add({
+                          'name': nameController.text.trim(),
+                          'age': age,
+                          'role': selectedRole ?? 'Other',
+                        });
+                      });
+                      Navigator.pop(context);
+                      _saveProfileChanges();
+                    }
+                  },
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -601,16 +656,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
           surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           title: const Text(
-            'Primary Reason for Care',
+            'Service Preferred',
             style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              'New mother',
-              'Post-surgery',
-              'Elderly care',
-              'Childcare',
+              'Post-Delivery Care',
+              'Mobility Support',
+              'Elder Care',
+              'Babysitting',
               'Other',
             ].map((reason) {
               return ListTile(
@@ -789,42 +844,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                _name,
-                                                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            GestureDetector(
-                                              onTap: _showEditProfileDialog,
-                                              child: Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.white.withValues(alpha: 0.2),
-                                                  borderRadius: BorderRadius.circular(10),
-                                                ),
-                                                child: Row(
-                                                  children: const [
-                                                    Icon(Icons.edit, color: Colors.white, size: 14),
-                                                    SizedBox(width: 4),
-                                                    Text(
-                                                      'Edit',
-                                                      style: TextStyle(
-                                                        color: Colors.white,
-                                                        fontSize: 12,
-                                                        fontWeight: FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ],
+                                        Text(
+                                          _name,
+                                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                                          overflow: TextOverflow.ellipsis,
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
@@ -924,18 +947,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             const SizedBox(height: 28),
 
                             // Care Profile Card
-                            _buildSectionHeader('Care Profile', _showChangeReasonDialog, actionLabel: 'Change Reason'),
+                            _buildSectionHeader('Care Profile', _showChangeReasonDialog, actionLabel: 'Change Service'),
                             const SizedBox(height: 12),
                             _buildProfileCard([
-                              _buildDetailRow(Icons.health_and_safety_outlined, 'Primary Reason for Care', _primaryReason),
+                              _buildDetailRow(Icons.health_and_safety_outlined, 'Service Preferred', _primaryReason),
                               const SizedBox(height: 20),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
-                                  const Text(
-                                    'Household Members under Care',
-                                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
+                                  const Expanded(
+                                    child: Text(
+                                      'Household Members under Care',
+                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
+                                    ),
                                   ),
+                                  const SizedBox(width: 8),
                                   GestureDetector(
                                     onTap: _showAddMemberDialog,
                                     child: const Text(
@@ -1006,7 +1032,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                 ),
                                                 const SizedBox(height: 2),
                                                 Text(
-                                                  '$role • ${age > 0 ? '$age yrs' : 'Newborn'}',
+                                                  'Service Preferred: $role • ${age > 0 ? '$age yrs' : 'Newborn'}',
                                                   style: const TextStyle(fontSize: 12, color: Colors.grey),
                                                 ),
                                               ],
@@ -1068,10 +1094,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: HestiaColors.textDark),
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: HestiaColors.textDark),
+          ),
         ),
+        const SizedBox(width: 8),
         GestureDetector(
           onTap: onAction,
           child: Text(

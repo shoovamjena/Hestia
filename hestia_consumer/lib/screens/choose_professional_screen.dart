@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/colors.dart';
+import '../services/supabase_service.dart';
 import 'review_confirm_screen.dart';
 
 class ProfessionalProfile {
@@ -95,28 +97,37 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
       if (!timerCompleter.isCompleted) timerCompleter.complete();
     });
 
-    // Fetch professionals from Supabase concurrently with the timer
+    // Fetch matched professionals from the matching service concurrently with the timer
     try {
-      final response = await Supabase.instance.client
-          .from('professionals')
-          .select('id, full_name, avg_rating, total_sessions, background_check_status')
-          .order('full_name');
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        throw Exception('No authenticated user session found.');
+      }
 
-      final fetched = (response as List).map((row) {
+      final matchedRows = await SupabaseService.matchProfessionals(
+        userId: user.id,
+        serviceTitle: widget.serviceTitle,
+        selectedDate: widget.selectedDate,
+        selectedTime: widget.selectedTime,
+        selectedDuration: widget.selectedDuration,
+        preferSameProfessional: widget.preferSameProfessional,
+      );
+
+      final fetched = matchedRows.map((row) {
         final id = row['id']?.toString() ?? '';
         final name = row['full_name']?.toString() ?? 'Professional';
-        final ratingVal = row['avg_rating'];
-        final rating = ratingVal != null
-            ? double.tryParse(ratingVal.toString())?.toStringAsFixed(1) ?? '4.5'
-            : '4.5';
-        final sessions = row['total_sessions'] as int? ?? 0;
+        final sessions = int.tryParse(row['total_sessions']?.toString() ?? '') ?? 0;
+        final avgRatingVal = double.tryParse(row['avg_rating']?.toString() ?? '') ?? 5.0;
+        final rating = avgRatingVal.toStringAsFixed(1);
         final distance = 5;
         final isVerified = row['background_check_status']?.toString() == 'verified';
-        final isTopRated = ratingVal != null && (double.tryParse(ratingVal.toString()) ?? 0.0) >= 4.8;
+        final isTopRated = avgRatingVal >= 4.8;
+        final matchScore = row['matching_score'] as double? ?? 0.0;
 
         final tags = <String>[
           if (isVerified) 'Verified',
           if (isTopRated) 'Top rated',
+          if (matchScore > 0) 'Match: ${matchScore.toStringAsFixed(0)}%',
         ];
 
         return ProfessionalProfile(
@@ -216,7 +227,10 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                   children: [
                     // Back Button (Circular)
                     GestureDetector(
-                      onTap: () => Navigator.pop(context),
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        Navigator.pop(context);
+                      },
                       child: Container(
                         width: 44,
                         height: 44,
@@ -296,6 +310,7 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(28),
                           onTap: () {
+                            HapticFeedback.lightImpact();
                             final selectedProf = _matchedProfessional ?? _professionals.first;
                             Navigator.of(context).push(
                               MaterialPageRoute(
@@ -501,6 +516,7 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                 const SizedBox(height: 24),
                 GestureDetector(
                   onTap: () {
+                    HapticFeedback.lightImpact();
                     setState(() {
                       _isSearching = true;
                       _fetchError = false;
@@ -559,7 +575,7 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                 Icon(Icons.check_circle, color: Color(0xFF2E6B4A), size: 18),
                 SizedBox(width: 8),
                 Text(
-                  'MATCHED CAREGIVER',
+                  'MATCHED PROFESSIONAL',
                   style: TextStyle(
                     color: Color(0xFF2E6B4A),
                     fontWeight: FontWeight.bold,
@@ -651,15 +667,32 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                   children: [
                     ...List.generate(
                       5,
-                      (i) => const Icon(
-                        Icons.star,
-                        color: Color(0xFFDCA153),
-                        size: 18,
-                      ),
+                      (i) {
+                        final double rVal = double.tryParse(prof.rating) ?? 0.0;
+                        if (i < rVal.floor()) {
+                          return const Icon(
+                            Icons.star,
+                            color: Color(0xFFDCA153),
+                            size: 18,
+                          );
+                        } else if (i < rVal && rVal - i >= 0.25) {
+                          return const Icon(
+                            Icons.star_half,
+                            color: Color(0xFFDCA153),
+                            size: 18,
+                          );
+                        } else {
+                          return const Icon(
+                            Icons.star,
+                            color: Color(0xFFE2E2E2),
+                            size: 18,
+                          );
+                        }
+                      },
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      '${prof.rating} (${prof.sessionsCount} sessions)',
+                      '${prof.rating} (${prof.sessionsCount} ${prof.sessionsCount == 1 ? "session" : "sessions"})',
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
@@ -712,33 +745,32 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                 
                 const SizedBox(height: 16),
                 
-                // Matched tags row
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                // Matched tags wrap
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 12,
+                  runSpacing: 8,
                   children: prof.tags.map((tag) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6.0),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: tag == 'Verified'
+                            ? const Color(0xFFE8F5ED)
+                            : tag == 'Top rated'
+                                ? const Color(0xFFF3EDFA)
+                                : const Color(0xFFFAF2EB),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        tag,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
                           color: tag == 'Verified'
-                              ? const Color(0xFFE8F5ED)
+                              ? const Color(0xFF2E6B4A)
                               : tag == 'Top rated'
-                                  ? const Color(0xFFF3EDFA)
-                                  : const Color(0xFFFAF2EB),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          tag,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: tag == 'Verified'
-                                ? const Color(0xFF2E6B4A)
-                                : tag == 'Top rated'
-                                    ? const Color(0xFF6B4CA2)
-                                    : const Color(0xFF8B5A2B),
-                          ),
+                                  ? const Color(0xFF6B4CA2)
+                                  : const Color(0xFF8B5A2B),
                         ),
                       ),
                     );

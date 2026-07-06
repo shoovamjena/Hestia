@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'choose_professional_screen.dart';
@@ -11,12 +12,16 @@ class ScheduleScreen extends StatefulWidget {
   final String serviceTitle;
   final Map<String, int>? initialServicesMap;
   final ValueChanged<Map<String, int>>? onServicesChanged;
+  final DateTime? initialDate;
+  final String? initialTimeSlot;
 
   const ScheduleScreen({
     super.key,
     required this.serviceTitle,
     this.initialServicesMap,
     this.onServicesChanged,
+    this.initialDate,
+    this.initialTimeSlot,
   });
 
   @override
@@ -45,6 +50,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     } else {
       _servicesMap = {widget.serviceTitle: 30};
     }
+    _scheduledDate = widget.initialDate;
+    _scheduledTimeSlot = widget.initialTimeSlot;
     _loadAddress();
   }
 
@@ -63,7 +70,12 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         if (profileData != null) {
           setState(() {
             _userName = profileData['name'] ?? profileData['full_name'] ?? 'Soumya';
-            _phone = profileData['phone'] ?? user.phone ?? user.userMetadata?['phone'] ?? '+91 8144684265';
+            final authPhone = SupabaseService.currentUserPhone;
+            _phone = (profileData['phone'] as String?)?.isNotEmpty == true
+                ? profileData['phone'] as String
+                : authPhone.isNotEmpty
+                    ? authPhone
+                    : '+91 8144684265';
             
             if (profileData['address'] != null) {
               final Map<String, dynamic> address = Map<String, dynamic>.from(profileData['address']);
@@ -206,7 +218,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () {
+                      HapticFeedback.lightImpact();
+                      Navigator.pop(context);
+                    },
                   ),
                   const SizedBox(width: 8),
                   const Text(
@@ -1053,6 +1068,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                       child: InkWell(
                         borderRadius: BorderRadius.circular(14),
                         onTap: () {
+                          HapticFeedback.lightImpact();
                           if (!SupabaseService.isPhoneVerified()) {
                             _showPhoneVerificationPopup(context);
                             return;

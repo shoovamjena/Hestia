@@ -29,6 +29,38 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
     final serviceTitle = widget.bookingData['title'] ?? 'Post-Delivery Care';
     final totalAmount = widget.bookingData['amount'] ?? 1497;
 
+    String formatTime(dynamic timeObj) {
+      if (timeObj == null) return '--:--';
+      final DateTime parsed = timeObj is DateTime 
+          ? timeObj 
+          : DateTime.parse(timeObj.toString());
+      final local = parsed.toLocal();
+      int hour = local.hour;
+      final minute = local.minute.toString().padLeft(2, '0');
+      final period = hour >= 12 ? 'PM' : 'AM';
+      if (hour > 12) hour -= 12;
+      if (hour == 0) hour = 12;
+      return '$hour:$minute $period';
+    }
+
+    final actualStartObj = widget.bookingData['actual_start'];
+    final actualEndObj = widget.bookingData['actual_end'];
+    
+    int visibleLogsCount = 0;
+    if (actualStartObj != null) {
+      final DateTime actualStart = actualStartObj is DateTime 
+          ? actualStartObj 
+          : DateTime.parse(actualStartObj.toString()).toLocal();
+      final DateTime referenceTime = actualEndObj != null 
+          ? (actualEndObj is DateTime ? actualEndObj : DateTime.parse(actualEndObj.toString()))
+          : DateTime.now();
+      final elapsedMinutes = referenceTime.toUtc().difference(actualStart.toUtc()).inMinutes;
+      final offsets = [70, 44, 27, 14, 0];
+      for (final offset in offsets) {
+        if (elapsedMinutes >= offset) visibleLogsCount++;
+      }
+    }
+
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -130,11 +162,11 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                         children: [
                           _buildDetailRow('Professional', caregiverName),
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
-                          _buildDetailRow('Started', '9:00 AM'),
+                          _buildDetailRow('Started', formatTime(widget.bookingData['actual_start'])),
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
-                          _buildDetailRow('Ended', '12:02 PM'),
+                          _buildDetailRow('Ended', formatTime(widget.bookingData['actual_end'])),
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
-                          _buildDetailRow('Activities logged', '8 entries'),
+                          _buildDetailRow('Activities logged', '$visibleLogsCount ${visibleLogsCount == 1 ? "entry" : "entries"}'),
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
                           _buildDetailRow(
                             'Amount', 

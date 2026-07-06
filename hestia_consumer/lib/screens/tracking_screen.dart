@@ -1,11 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import '../config/mapbox_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'activity_log_screen.dart';
 import 'session_complete_screen.dart';
 import 'chat_screen.dart';
 import 'emergency_screen.dart';
+import 'rate_session_screen.dart';
 
 class TrackingScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -23,6 +29,15 @@ class _TrackingScreenState extends State<TrackingScreen> {
   Timer? _statusTimer;
   int _secondsElapsed = 5047; // starts around 01:24:07
   bool _isShowingVerificationDialog = false;
+  bool _isApologizing = false;
+
+  LatLng? _hubLocation;
+  LatLng? _userLocation;
+  List<LatLng> _routePoints = [];
+  double _routeDistanceKm = 0.0;
+  int _routeDurationMin = 0;
+  bool _isLoadingMap = true;
+  final MapController _mapController = MapController();
 
   @override
   void initState() {
@@ -32,6 +47,12 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _isOnTheWayView = !(status == 'started' || status == 'active' || status == 'in_progress');
     _startStopwatch();
     _startStatusPolling();
+    _loadRouteAndCoordinates();
+
+    // Check for no-show immediately on launch
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkNoShowAndApologize(_bookingData);
+    });
   }
 
   @override
@@ -47,6 +68,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
       if (bookingId != null) {
         final updated = await SupabaseService.getBookingStatus(bookingId.toString());
         if (updated != null && mounted) {
+          final shouldLoadRoute = _hubLocation == null &&
+              (updated['hub_address'] != null || updated['user_address'] != null);
           setState(() {
             _bookingData = updated;
             final status = _bookingData['status'];
@@ -57,7 +80,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
               _isOnTheWayView = true;
             }
           });
+          if (shouldLoadRoute) {
+            _loadRouteAndCoordinates();
+          }
           _checkArrivalRequest(updated);
+          _checkNoShowAndApologize(updated);
         }
       }
     });
@@ -67,12 +94,15 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _stopwatchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
-          final actualStart = _bookingData['actual_start'];
-          if (actualStart != null) {
-            final startTime = actualStart is DateTime ? actualStart : DateTime.parse(actualStart.toString());
-            _secondsElapsed = DateTime.now().difference(startTime).inSeconds;
+          final actualEndObj = _bookingData['actual_end'];
+          if (actualEndObj != null) {
+            final endTime = actualEndObj is DateTime 
+                ? actualEndObj 
+                : DateTime.parse(actualEndObj.toString());
+            // Countdown: remaining seconds until end_time
+            _secondsElapsed = endTime.toUtc().difference(DateTime.now().toUtc()).inSeconds;
           } else {
-            _secondsElapsed++;
+            _secondsElapsed = 0;
           }
         });
       }
@@ -80,6 +110,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   String _formatStopwatch(int totalSeconds) {
+    if (totalSeconds <= 0) return '00:00:00';
     final int hours = totalSeconds ~/ 3600;
     final int minutes = (totalSeconds % 3600) ~/ 60;
     final int seconds = totalSeconds % 60;
@@ -245,12 +276,472 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
+  void _checkNoShowAndApologize(Map<String, dynamic> bookingData) {
+    final status = bookingData['status']?.toString().toLowerCase();
+
+    // If the session has already started, arrived, or is complete, no check needed
+    if (status == 'arrived' || status == 'active' || status == 'in_progress' || status == 'completed') {
+      return;
+    }
+
+    final scheduledStartObj = bookingData['scheduled_start'];
+    if (scheduledStartObj == null) return;
+
+    final DateTime scheduledStart = scheduledStartObj is DateTime
+        ? scheduledStartObj
+        : DateTime.parse(scheduledStartObj.toString());
+
+    final double durationHours = (bookingData['duration_hours'] as num?)?.toDouble() ?? 2.0;
+    final scheduledEnd = scheduledStart.add(Duration(minutes: (durationHours * 60).round()));
+
+    // Check if current time is past the scheduled slot window
+    if (DateTime.now().isAfter(scheduledEnd)) {
+      _showNoShowApologyAndRedirect(bookingData);
+    }
+  }
+
+  void _showNoShowApologyAndRedirect(Map<String, dynamic> bookingData) async {
+    if (_isApologizing) return;
+    setState(() {
+      _isApologizing = true;
+    });
+
+    // Cancel active polling and stopwatch timers
+    _statusTimer?.cancel();
+    _stopwatchTimer.cancel();
+
+    final bookingId = bookingData['booking_id']?.toString() ?? '';
+
+    // Mark as no-show in backend
+    if (bookingId.isNotEmpty) {
+      await SupabaseService.markNoShow(bookingId);
+    }
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: const Color(0xFFFAF6F0),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.error_outline_rounded,
+                color: Color(0xFFC0392B),
+                size: 28,
+              ),
+              SizedBox(width: 10),
+              Text(
+                'We are truly sorry',
+                style: TextStyle(
+                  color: HestiaColors.textDark,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'It looks like your caregiver, ${bookingData['caregiver_name'] ?? 'your professional'}, was unable to arrive for the scheduled session.',
+                style: const TextStyle(
+                  color: HestiaColors.textDark,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'We have automatically cancelled this booking and processed a full refund to your original payment method. We are currently reviewing this incident with our operations team.',
+                style: TextStyle(
+                  color: HestiaColors.textMedium,
+                  fontSize: 13,
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(); // Dismiss apology dialog
+
+                  // Construct session data for rating screen
+                  final scheduledStartObj = bookingData['scheduled_start'];
+                  final DateTime scheduledStart = scheduledStartObj is DateTime
+                      ? scheduledStartObj
+                      : (scheduledStartObj != null ? DateTime.parse(scheduledStartObj.toString()) : DateTime.now());
+
+                  final sessionData = {
+                    'booking_id': bookingId,
+                    'caregiver_name': bookingData['caregiver_name'] ?? 'Professional',
+                    'title': bookingData['title'] ?? bookingData['service_type'] ?? 'Care',
+                    'scheduled_start': scheduledStart,
+                  };
+
+                  // Redirect to RateSessionScreen and pop current route
+                  Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(
+                      builder: (context) => RateSessionScreen(sessionData: sessionData),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: HestiaColors.primary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Continue to Review',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   String _generateVerificationCode(String id) {
     final cleaned = id.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase();
     if (cleaned.length >= 6) {
       return cleaned.substring(0, 6);
     }
     return '${cleaned}HESTIA'.substring(0, 6);
+  }
+
+  String _getInitials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.isNotEmpty ? name[0].toUpperCase() : 'P';
+  }
+
+  String _formatMetricTime() {
+    final start = _bookingData['scheduled_start'];
+    if (start is DateTime) {
+      int hour = start.hour;
+      final minute = start.minute.toString().padLeft(2, '0');
+      final period = hour >= 12 ? 'PM' : 'AM';
+      if (hour > 12) hour -= 12;
+      if (hour == 0) hour = 12;
+      return '$hour:$minute\n$period';
+    }
+    return '--:--\n--';
+  }
+
+  String _formatMetricDuration() {
+    final amount = _bookingData['amount'];
+    if (amount != null && amount is int && amount > 0) {
+      return '₹$amount';
+    }
+    return '';
+  }
+
+  String _formatMetricService() {
+    final title = _bookingData['title']?.toString() ?? 'Care';
+    // Break long service names for the metric block
+    if (title.length > 8) {
+      final mid = title.indexOf(' ');
+      if (mid > 0) {
+        return '${title.substring(0, mid)}\n${title.substring(mid + 1)}';
+      }
+    }
+    return title;
+  }
+
+  String _formatMetricHub() {
+    final hubName = _bookingData['hub_name']?.toString() ?? 'Hub';
+    // Split by common dash characters: em dash (—), en dash (–), hyphen (-) to clean up sector/branch names
+    final cleanName = hubName.split(RegExp(r'[\u2014\u2013-]')).first.trim();
+    if (cleanName.length > 8) {
+      final mid = cleanName.indexOf(' ');
+      if (mid > 0) {
+        return '${cleanName.substring(0, mid)}\n${cleanName.substring(mid + 1)}';
+      }
+    }
+    return cleanName;
+  }
+
+  Future<LatLng?> _geocodeAddress(String query) async {
+    if (MapboxConfig.accessToken.isEmpty) return null;
+    try {
+      final url = 'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json?access_token=${MapboxConfig.accessToken}&limit=1';
+      final response = await HttpClient().getUrl(Uri.parse(url)).then((req) => req.close()).then((res) => res.transform(utf8.decoder).join());
+      final data = jsonDecode(response) as Map<String, dynamic>;
+      final features = data['features'] as List?;
+      if (features != null && features.isNotEmpty) {
+        final center = features.first['center'] as List;
+        return LatLng(center[1] as double, center[0] as double);
+      }
+    } catch (e) {
+      debugPrint('Error geocoding address: $e');
+    }
+    return null;
+  }
+
+  Future<void> _loadRouteAndCoordinates() async {
+    final hubAddr = _bookingData['hub_address']?.toString() ?? '';
+    final userAddr = _bookingData['user_address']?.toString() ?? '';
+    
+    if (hubAddr.isEmpty || userAddr.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _isLoadingMap = false;
+        });
+      }
+      return;
+    }
+    
+    final hubLoc = await _geocodeAddress(hubAddr);
+    final userLoc = await _geocodeAddress(userAddr);
+    
+    if (hubLoc != null && userLoc != null && mounted) {
+      setState(() {
+        _hubLocation = hubLoc;
+        _userLocation = userLoc;
+      });
+      
+      // Fetch Route from Mapbox Directions API
+      try {
+        final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/${hubLoc.longitude},${hubLoc.latitude};${userLoc.longitude},${userLoc.latitude}?geometries=geojson&access_token=${MapboxConfig.accessToken}';
+        final response = await HttpClient().getUrl(Uri.parse(url)).then((req) => req.close()).then((res) => res.transform(utf8.decoder).join());
+        final data = jsonDecode(response) as Map<String, dynamic>;
+        final routes = data['routes'] as List?;
+        if (routes != null && routes.isNotEmpty) {
+          final route = routes.first as Map<String, dynamic>;
+          final geometry = route['geometry'] as Map<String, dynamic>;
+          final coordinates = geometry['coordinates'] as List;
+          final distance = route['distance'] as num; // meters
+          final duration = route['duration'] as num; // seconds
+          
+          if (mounted) {
+            setState(() {
+              _routePoints = coordinates.map((c) => LatLng(c[1] as double, c[0] as double)).toList();
+              _routeDistanceKm = distance / 1000.0;
+              _routeDurationMin = (duration / 60.0).round();
+              _isLoadingMap = false;
+            });
+          }
+          return;
+        }
+      } catch (e) {
+        debugPrint('Error getting directions: $e');
+      }
+    }
+    
+    if (mounted) {
+      setState(() {
+        _isLoadingMap = false;
+      });
+    }
+  }
+
+  Widget _buildMapWidget() {
+    if (_isLoadingMap) {
+      return const Center(
+        child: CircularProgressIndicator(color: HestiaColors.primary),
+      );
+    }
+    
+    if (_hubLocation == null || _userLocation == null) {
+      return const Center(
+        child: Text(
+          'Map data unavailable',
+          style: TextStyle(color: HestiaColors.textLight),
+        ),
+      );
+    }
+    
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: LatLng(
+          (_hubLocation!.latitude + _userLocation!.latitude) / 2,
+          (_hubLocation!.longitude + _userLocation!.longitude) / 2,
+        ),
+        initialZoom: 12.5,
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: MapboxConfig.accessToken.isNotEmpty
+              ? 'https://api.mapbox.com/styles/v1/${MapboxConfig.styleId}/tiles/256/{z}/{x}/{y}@2x?access_token=${MapboxConfig.accessToken}'
+              : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          userAgentPackageName: 'com.example.hestia_consumer_app',
+        ),
+        if (_routePoints.isNotEmpty)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _routePoints,
+                color: HestiaColors.primary,
+                strokeWidth: 4.0,
+              ),
+            ],
+          ),
+        MarkerLayer(
+          markers: [
+            Marker(
+              point: _hubLocation!,
+              width: 40,
+              height: 40,
+              child: const Icon(
+                Icons.store_mall_directory_rounded,
+                color: HestiaColors.primary,
+                size: 30,
+              ),
+            ),
+            Marker(
+              point: _userLocation!,
+              width: 40,
+              height: 40,
+              child: const Icon(
+                Icons.location_on_rounded,
+                color: Colors.redAccent,
+                size: 30,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  String _formatEndsAtText() {
+    final actualEndObj = _bookingData['actual_end'];
+    if (actualEndObj == null) return 'Ends at --:-- · -- min left';
+    
+    final DateTime actualEnd = actualEndObj is DateTime 
+        ? actualEndObj 
+        : DateTime.parse(actualEndObj.toString());
+        
+    final DateTime localEnd = actualEnd.toLocal();
+    int hour = localEnd.hour;
+    final minute = localEnd.minute.toString().padLeft(2, '0');
+    final period = hour >= 12 ? 'PM' : 'AM';
+    if (hour > 12) hour -= 12;
+    if (hour == 0) hour = 12;
+    final endsAtStr = '$hour:$minute $period';
+    
+    final difference = actualEnd.toUtc().difference(DateTime.now().toUtc());
+    if (difference.isNegative) {
+      return 'Ends at $endsAtStr · Completed';
+    }
+    
+    final minutesLeft = difference.inMinutes;
+    if (minutesLeft < 60) {
+      return 'Ends at $endsAtStr · $minutesLeft min left';
+    } else {
+      final hoursLeft = minutesLeft ~/ 60;
+      final remainingMins = minutesLeft % 60;
+      return 'Ends at $endsAtStr · $hoursLeft hr $remainingMins min left';
+    }
+  }
+
+  int _getVisibleLogsCount() {
+    final actualStartObj = _bookingData['actual_start'];
+    if (actualStartObj == null) return 0;
+    
+    final DateTime actualStart = actualStartObj is DateTime 
+        ? actualStartObj 
+        : DateTime.parse(actualStartObj.toString()).toLocal();
+    final elapsedMinutes = DateTime.now().difference(actualStart).inMinutes;
+    
+    final offsets = [70, 44, 27, 0];
+    int count = 0;
+    for (final offset in offsets) {
+      if (elapsedMinutes >= offset) count++;
+    }
+    return count;
+  }
+
+  Widget _buildActivityLogsList() {
+    final actualStartObj = _bookingData['actual_start'];
+    if (actualStartObj == null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        child: _logEntry('--:--', 'Waiting for session to start...', false, false),
+      );
+    }
+    
+    final DateTime actualStart = actualStartObj is DateTime 
+        ? actualStartObj 
+        : DateTime.parse(actualStartObj.toString()).toLocal();
+    final elapsedMinutes = DateTime.now().difference(actualStart).inMinutes;
+    
+    final List<Map<String, dynamic>> rawLogs = [
+      {
+        'minutesOffset': 70,
+        'message': 'Newborn bathed and swaddled comfortably',
+        'isGreen': true,
+        'showNew': true,
+      },
+      {
+        'minutesOffset': 44,
+        'message': 'Breastfeeding positioning assisted, mother resting',
+        'isGreen': false,
+        'showNew': false,
+      },
+      {
+        'minutesOffset': 27,
+        'message': 'Light breakfast prepared for mother',
+        'isGreen': false,
+        'showNew': false,
+      },
+      {
+        'minutesOffset': 0,
+        'message': 'Session started. Checked on Aryan, settled well',
+        'isGreen': false,
+        'showNew': false,
+      },
+    ];
+    
+    final List<Widget> children = [];
+    bool firstAdded = false;
+    for (final raw in rawLogs) {
+      final offset = raw['minutesOffset'] as int;
+      if (elapsedMinutes >= offset) {
+        final logTime = actualStart.add(Duration(minutes: offset)).toLocal();
+        final hour = logTime.hour.toString().padLeft(2, '0');
+        final minute = logTime.minute.toString().padLeft(2, '0');
+        
+        children.add(
+          _logEntry(
+            '$hour:$minute',
+            raw['message'],
+            !firstAdded ? true : raw['isGreen'],
+            !firstAdded ? true : raw['showNew'],
+          ),
+        );
+        firstAdded = true;
+      }
+    }
+    
+    if (children.isEmpty) {
+      children.add(_logEntry('--:--', 'Waiting for first log entry...', false, false));
+    }
+    
+    return Column(children: children);
   }
 
   @override
@@ -325,8 +816,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) => const ChatScreen(
-                          caregiverName: 'Sunita Rao',
+                        builder: (context) => ChatScreen(
+                          caregiverName: _bookingData['caregiver_name'] ?? 'Professional',
                         ),
                       ),
                     );
@@ -408,10 +899,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Center(
+          Center(
             child: Text(
-              'Sunita is on the way',
-              style: TextStyle(
+              '${_bookingData['caregiver_name']?.toString().split(' ').first ?? 'Professional'} is on the way',
+              style: const TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w900,
                 color: Colors.white,
@@ -435,10 +926,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(22),
-                  child: CustomPaint(
-                    size: Size.infinite,
-                    painter: MapPainter(),
-                  ),
+                  child: _buildMapWidget(),
                 ),
                 // Hub label overlay
                 Positioned(
@@ -505,20 +993,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Text(
+                          children: [
+                            const Text(
                               'ARRIVING IN',
                               style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                                color: HestiaColors.textMedium,
-                                letterSpacing: 0.5,
-                              ),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                  color: HestiaColors.textMedium,
+                                  letterSpacing: 0.5),
                             ),
-                            SizedBox(height: 2),
+                            const SizedBox(height: 2),
                             Text(
-                              '23 min',
-                              style: TextStyle(
+                              _routeDurationMin > 0 ? '$_routeDurationMin min' : '23 min',
+                              style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w900,
                                 color: HestiaColors.textDark,
@@ -526,9 +1013,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
                             ),
                           ],
                         ),
-                        const Text(
-                          '2.4 km away',
-                          style: TextStyle(
+                        Text(
+                          _routeDistanceKm > 0
+                              ? '${_routeDistanceKm.toStringAsFixed(1)} km away'
+                              : '2.4 km away',
+                          style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
                             color: HestiaColors.textMedium,
@@ -563,9 +1052,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     shape: BoxShape.circle,
                   ),
                   alignment: Alignment.center,
-                  child: const Text(
-                    'SR',
-                    style: TextStyle(
+                  child: Text(
+                    _getInitials(_bookingData['caregiver_name'] ?? 'P'),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -576,19 +1065,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Text(
-                        'Sunita Rao',
-                        style: TextStyle(
+                        _bookingData['caregiver_name'] ?? 'Professional',
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                           color: HestiaColors.textDark,
                         ),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 2),
                       Text(
-                        'Post-Delivery Specialist',
-                        style: TextStyle(
+                        '${_bookingData['title'] ?? 'Care'} Specialist',
+                        style: const TextStyle(
                           fontSize: 12,
                           color: HestiaColors.textMedium,
                         ),
@@ -596,13 +1085,13 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     ],
                   ),
                 ),
-                Row(
+                const Row(
                   mainAxisSize: MainAxisSize.min,
-                  children: const [
+                  children: [
                     Icon(Icons.star, color: Colors.orange, size: 14),
                     SizedBox(width: 4),
                     Text(
-                      '4.9',
+                      '5.0',
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.bold,
@@ -618,11 +1107,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
           // Grid metrics block (Booked, Service, Hub)
           Row(
             children: [
-              _metricBlock('BOOKED', '9:00\nAM', '3 hrs'),
+              _metricBlock('BOOKED', _formatMetricTime(), _formatMetricDuration()),
               const SizedBox(width: 10),
-              _metricBlock('SERVICE', 'Post-\nDelivery', 'Care'),
+              _metricBlock('SERVICE', _formatMetricService(), 'Care'),
               const SizedBox(width: 10),
-              _metricBlock('HUB', 'Koraman-\ngala', 'South BLR'),
+              _metricBlock('HUB', _formatMetricHub(), ''),
             ],
           ),
           const SizedBox(height: 20),
@@ -646,10 +1135,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
                   size: 20,
                 ),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Location updates every 15 seconds. You\'ll be notified when Sunita arrives.',
-                    style: TextStyle(
+                    'Location updates every 15 seconds. You\'ll be notified when ${_bookingData['caregiver_name']?.toString().split(' ').first ?? 'the professional'} arrives.',
+                    style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFF78593E),
                       height: 1.45,
@@ -845,9 +1334,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    const Text(
-                      'Ends at 12:00 PM · 1 hr 35 min left',
-                      style: TextStyle(
+                    Text(
+                      _formatEndsAtText(),
+                      style: const TextStyle(
                         fontSize: 11,
                         color: Color(0xFFDCD2C9),
                       ),
@@ -859,19 +1348,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
                   right: 0,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
-                    children: const [
-                      Text(
+                    children: [
+                      const Text(
                         'Professional',
                         style: TextStyle(
                           fontSize: 9,
                           color: Color(0xFFDCD2C9),
                         ),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 2),
                       Text(
-                        'Sunita\nRao',
+                        (_bookingData['caregiver_name'] ?? 'Professional').toString().replaceFirst(' ', '\n'),
                         textAlign: TextAlign.end,
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
@@ -915,17 +1404,17 @@ class _TrackingScreenState extends State<TrackingScreen> {
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
-                    children: const [
+                    children: [
                       Text(
-                        '4 entries',
-                        style: TextStyle(
+                        '${_getVisibleLogsCount()} ${_getVisibleLogsCount() == 1 ? "entry" : "entries"}',
+                        style: const TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
                           color: Color(0xFF2E7D32),
                         ),
                       ),
-                      SizedBox(width: 4),
-                      Icon(
+                      const SizedBox(width: 4),
+                      const Icon(
                         Icons.chevron_right_rounded,
                         color: Color(0xFF2E7D32),
                         size: 14,
@@ -938,14 +1427,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
           ),
           const SizedBox(height: 16),
           // Activity log entries list
-          Column(
-            children: [
-              _logEntry('10:48', 'Newborn bathed and swaddled comfortably', true, true),
-              _logEntry('10:22', 'Breastfeeding positioning assisted, mother resting', false, false),
-              _logEntry('10:05', 'Light breakfast prepared for mother', false, false),
-              _logEntry('09:38', 'Session started. Checked on Aryan, settled well', false, false),
-            ],
-          ),
+          _buildActivityLogsList(),
           const SizedBox(height: 24),
           // Caregiver Footer Info card
           Container(
@@ -968,9 +1450,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     shape: BoxShape.circle,
                   ),
                   alignment: Alignment.center,
-                  child: const Text(
-                    'SR',
-                    style: TextStyle(
+                  child: Text(
+                    _getInitials(_bookingData['caregiver_name'] ?? 'P'),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -981,19 +1463,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Text(
-                        'Sunita Rao',
-                        style: TextStyle(
+                        _bookingData['caregiver_name'] ?? 'Professional',
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                           color: HestiaColors.textDark,
                         ),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 2),
                       Text(
-                        'Post-Delivery Specialist · Verified',
-                        style: TextStyle(
+                        '${_bookingData['title'] ?? 'Care'} Specialist · Verified',
+                        style: const TextStyle(
                           fontSize: 11,
                           color: HestiaColors.textMedium,
                         ),
@@ -1049,7 +1531,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   Widget _metricBlock(String label, String value, String sub) {
     return Expanded(
       child: Container(
-        height: 90,
+        height: 96,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
           color: const Color(0xFFFDFCFB),
@@ -1075,20 +1557,22 @@ class _TrackingScreenState extends State<TrackingScreen> {
             Text(
               value,
               style: const TextStyle(
-                fontSize: 14,
+                fontSize: 15,
                 fontWeight: FontWeight.bold,
                 color: HestiaColors.textDark,
                 height: 1.15,
               ),
             ),
-            const SizedBox(height: 2),
-            Text(
-              sub,
-              style: const TextStyle(
-                fontSize: 9,
-                color: HestiaColors.textLight,
+            if (sub.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                sub,
+                style: const TextStyle(
+                  fontSize: 9,
+                  color: HestiaColors.textLight,
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),

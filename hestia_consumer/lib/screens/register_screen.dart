@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
 import '../theme/colors.dart';
@@ -122,6 +123,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           final phone = '+91${_phoneController.text.trim().replaceAll(' ', '')}';
           if (_signUpMethod == SignUpMethod.emailPassword) {
             SupabaseService.pendingSignUpPassword = _passwordController.text;
+            SupabaseService.pendingSignUpName = _nameController.text.trim();
+            SupabaseService.pendingSignUpPhone = phone;
             final response = await SupabaseService.signUpWithEmail(
               email: _emailController.text.trim(),
               password: _passwordController.text,
@@ -129,11 +132,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
               phone: phone,
             );
             if (response.user != null) {
-              await SupabaseService.createProfile(
-                id: response.user!.id,
-                fullName: _nameController.text.trim(),
-                phone: phone,
-              );
+              try {
+                await SupabaseService.createProfile(
+                  id: response.user!.id,
+                  fullName: _nameController.text.trim(),
+                  phone: phone,
+                );
+              } catch (e) {
+                // Ignore initial create profile error (e.g. due to unauthenticated RLS)
+                // because it will be retried and created successfully on the OTP verification screen
+                // once the user session is authenticated.
+                print('Note: Initial createProfile failed (expected if RLS requires auth): $e');
+              }
             }
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
@@ -152,6 +162,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             }
           } else {
             SupabaseService.pendingSignUpName = _nameController.text.trim();
+            SupabaseService.pendingSignUpPhone = phone;
             await SupabaseService.signInWithOtp(phone: phone);
             if (mounted) {
               Navigator.of(context).push(
@@ -685,13 +696,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
         Expanded(
           child: _buildTextFormField(
             controller: _phoneController,
-            placeholder: '81465 12345',
+            placeholder: '8146512345',
             keyboardType: TextInputType.phone,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(10),
+            ],
             validator: (value) {
               if (value == null || value.trim().isEmpty) {
                 return 'Please enter your phone number';
               }
-              if (value.trim().replaceAll(' ', '').length < 10) {
+              if (value.trim().replaceAll(' ', '').length != 10) {
                 return 'Enter a valid 10-digit number';
               }
               return null;
@@ -751,11 +766,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     bool obscureText = false,
     Widget? suffixIcon,
     String? Function(String?)? validator,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return TextFormField(
       controller: controller,
       obscureText: obscureText,
       keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       style: const TextStyle(
         fontSize: 16,
         color: Colors.white,

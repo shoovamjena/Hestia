@@ -48,10 +48,32 @@ void main() {
       final profs = await client.from('professionals').select('*');
       print('Authenticated Professionals list: $profs');
 
-      // Cleanup
-      final user = client.auth.currentUser;
-      if (user != null) {
-        await client.from('users').delete().eq('id', user.id);
+      try {
+        final bookings = await client.from('bookings').select('*').limit(1);
+        print('Bookings sample record: $bookings');
+      } catch (be) {
+        print('Error reading bookings table: $be');
+      }
+
+      try {
+        final sessionsList = await client.from('sessions').select('id').limit(1);
+        if (sessionsList.isNotEmpty) {
+          final sId = sessionsList.first['id'];
+          final feedback = await client.from('session_feedback').insert({
+            'session_id': sId,
+            'user_id': client.auth.currentUser!.id,
+            'rating': 5,
+            'punctuality': 5,
+            'professionalism': 5,
+            'quality': 5,
+            'comment': 'Good',
+          }).select('*');
+          print('SESSION FEEDBACK RECORD COLUMNS: $feedback');
+        } else {
+          print('No sessions found in DB.');
+        }
+      } catch (e) {
+        print('SESSION FEEDBACK INSERT ERROR: $e');
       }
     } catch (e) {
       print('Error during authenticated scan: $e');

@@ -235,6 +235,8 @@ class _OtpScreenState extends State<OtpScreen> {
           email: widget.contactInfo,
           token: otp,
         );
+        SupabaseService.pendingSignUpName = null;
+        SupabaseService.pendingSignUpPhone = null;
       }
       if (mounted) {
         // Show success message for verification
@@ -340,9 +342,11 @@ class _OtpScreenState extends State<OtpScreen> {
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-            child: Column(
+          child: SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Header Row: Back Button and Hestia Title
@@ -448,6 +452,32 @@ class _OtpScreenState extends State<OtpScreen> {
                                 ? 'Twilio Sandbox: SMS OTP will be sent to your registered sandbox number.'
                                 : 'Twilio Sandbox: SMS will not be sent to this number. Use "123456" as the OTP bypass code.',
                             style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12.5,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ] else if (widget.verificationType == OtpVerificationType.emailSignUp || widget.verificationType == OtpVerificationType.emailSignIn) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3), width: 1.0),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, color: Colors.orangeAccent, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: const Text(
+                            'Sandbox Mode: If you do not receive the email OTP, use "123456" as the bypass code.',
+                            style: TextStyle(
                               color: Colors.white,
                               fontSize: 12.5,
                               height: 1.4,
@@ -681,6 +711,7 @@ class _OtpScreenState extends State<OtpScreen> {
             ],
           ),
         ),
+       ),
       ),
     ),
    );

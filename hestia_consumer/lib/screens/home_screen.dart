@@ -72,7 +72,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _userName = metadataName;
         _userInitials = _getInitials(metadataName);
         _email = user.email ?? '';
-        _phone = user.phone ?? user.userMetadata?['phone'] ?? '';
+        _phone = SupabaseService.currentUserPhone;
       });
 
       try {
@@ -181,6 +181,57 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     if (age <= 19) return '🧑';
     if (age <= 59) return '🧑';
     return '👵';
+  }
+
+  _AvailableSlot _getRecentAvailableSlot() {
+    final now = DateTime.now();
+    final limitTime = now.add(const Duration(hours: 1));
+    
+    final List<String> slots = [
+      '7:00 AM', '7:30 AM', '8:00 AM', '8:30 AM', '9:00 AM', '9:30 AM',
+      '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM', '12:00 PM', '12:30 PM',
+      '1:00 PM', '1:30 PM', '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM',
+      '4:00 PM', '4:30 PM', '5:00 PM', '5:30 PM', '6:00 PM', '6:30 PM',
+      '7:00 PM', '7:30 PM', '8:00 PM', '8:30 PM',
+    ];
+
+    DateTime? parseSlot(String slotStr) {
+      try {
+        final parts = slotStr.split(' ');
+        final timeParts = parts[0].split(':');
+        int hour = int.parse(timeParts[0]);
+        final minute = int.parse(timeParts[1]);
+        final amPm = parts[1].toUpperCase();
+
+        if (amPm == 'PM' && hour != 12) {
+          hour += 12;
+        } else if (amPm == 'AM' && hour == 12) {
+          hour = 0;
+        }
+        return DateTime(now.year, now.month, now.day, hour, minute);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    for (final slot in slots) {
+      if (slot == '7:00 PM' || slot == '8:00 PM' || slot == '8:30 PM') continue;
+      final slotTime = parseSlot(slot);
+      if (slotTime != null && slotTime.isAfter(limitTime)) {
+        return _AvailableSlot(
+          displayString: 'Next slot at $slot',
+          date: DateTime(now.year, now.month, now.day),
+          slot: slot,
+        );
+      }
+    }
+
+    final tomorrow = now.add(const Duration(days: 1));
+    return _AvailableSlot(
+      displayString: 'Next slot tomorrow 7:00 AM',
+      date: DateTime(tomorrow.year, tomorrow.month, tomorrow.day),
+      slot: '7:00 AM',
+    );
   }
 
   Widget _serviceTile(
@@ -455,6 +506,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     required String originalPrice,
     required String saveAmount,
     required String serviceTitle,
+    required int durationMinutes,
+    required DateTime initialDate,
+    required String initialTimeSlot,
   }) {
     return Container(
       width: 160,
@@ -545,7 +599,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) => ScheduleScreen(serviceTitle: serviceTitle),
+                        builder: (context) => ScheduleScreen(
+                          serviceTitle: serviceTitle,
+                          initialServicesMap: {serviceTitle: durationMinutes},
+                          initialDate: initialDate,
+                          initialTimeSlot: initialTimeSlot,
+                        ),
                       ),
                     );
                   },
@@ -1542,33 +1601,39 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const SizedBox(width: 8),
-              const Text(
-                'CARE PROFILE',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: HestiaColors.primary,
+              const Padding(
+                padding: EdgeInsets.only(left: 8),
+                child: Text(
+                  'CARE PROFILE',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: HestiaColors.primary,
+                  ),
                 ),
               ),
-              const Spacer(),
               if (_primaryReason.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: HestiaColors.primary.withValues(alpha: 0.7),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    _primaryReason,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                Flexible(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: HestiaColors.primary.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _primaryReason,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
                   ),
                 ),
@@ -2261,35 +2326,49 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 const SizedBox(height: 12),
                 SizedBox(
                   height: 200,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    children: [
-                      _busyPartnerCard(
-                        nextSlot: 'Next slot at 4:00 PM',
-                        duration: '0.5 hr',
-                        price: '₹250',
-                        originalPrice: '₹500',
-                        saveAmount: 'Save ₹250',
-                        serviceTitle: 'Post-Delivery Care',
-                      ),
-                      _busyPartnerCard(
-                        nextSlot: 'Next slot at 4:00 PM',
-                        duration: '1 hr',
-                        price: '₹499',
-                        originalPrice: '₹999',
-                        saveAmount: 'Save ₹500',
-                        serviceTitle: 'Post-Delivery Care',
-                      ),
-                      _busyPartnerCard(
-                        nextSlot: 'Next slot at 4:00 PM',
-                        duration: '1.5 hr',
-                        price: '₹749',
-                        originalPrice: '₹1499',
-                        saveAmount: 'Save ₹750',
-                        serviceTitle: 'Post-Delivery Care',
-                      ),
-                    ],
+                  child: Builder(
+                    builder: (context) {
+                      final slotInfo = _getRecentAvailableSlot();
+                      return ListView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        children: [
+                          _busyPartnerCard(
+                            nextSlot: slotInfo.displayString,
+                            duration: '0.5 hr',
+                            price: '₹250',
+                            originalPrice: '₹500',
+                            saveAmount: 'Save ₹250',
+                            serviceTitle: 'Post-Delivery Care',
+                            durationMinutes: 30,
+                            initialDate: slotInfo.date,
+                            initialTimeSlot: slotInfo.slot,
+                          ),
+                          _busyPartnerCard(
+                            nextSlot: slotInfo.displayString,
+                            duration: '1 hr',
+                            price: '₹499',
+                            originalPrice: '₹999',
+                            saveAmount: 'Save ₹500',
+                            serviceTitle: 'Post-Delivery Care',
+                            durationMinutes: 60,
+                            initialDate: slotInfo.date,
+                            initialTimeSlot: slotInfo.slot,
+                          ),
+                          _busyPartnerCard(
+                            nextSlot: slotInfo.displayString,
+                            duration: '1.5 hr',
+                            price: '₹749',
+                            originalPrice: '₹1499',
+                            saveAmount: 'Save ₹750',
+                            serviceTitle: 'Post-Delivery Care',
+                            durationMinutes: 90,
+                            initialDate: slotInfo.date,
+                            initialTimeSlot: slotInfo.slot,
+                          ),
+                        ],
+                      );
+                    }
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -2458,7 +2537,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           AnimatedPositioned(
             duration: const Duration(milliseconds: 350),
             curve: Curves.easeOutBack,
-            bottom: _serviceMinutes.isNotEmpty ? 140 : -60,
+            bottom: _serviceMinutes.isNotEmpty ? 100 : -60,
             left: 24,
             right: 24,
             child: AnimatedOpacity(
@@ -3026,4 +3105,16 @@ class CalendarIllustration extends StatelessWidget {
       ),
     );
   }
+}
+
+class _AvailableSlot {
+  final String displayString;
+  final DateTime date;
+  final String slot;
+
+  _AvailableSlot({
+    required this.displayString,
+    required this.date,
+    required this.slot,
+  });
 }

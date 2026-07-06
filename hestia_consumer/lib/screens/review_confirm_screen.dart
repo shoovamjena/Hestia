@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../config/razorpay_config.dart';
 import '../theme/colors.dart';
@@ -45,6 +46,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
   List<Map<String, dynamic>> _allMembers = [];
   String? _selectedMemberId;
   late Razorpay _razorpay;
+  final TextEditingController _careNotesController = TextEditingController();
 
   @override
   void initState() {
@@ -59,6 +61,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
   @override
   void dispose() {
     _razorpay.clear();
+    _careNotesController.dispose();
     super.dispose();
   }
 
@@ -106,9 +109,13 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
           totalAmount: finalPay,
           paymentId: response.paymentId,
           householdMemberId: _selectedMemberId,
+          careNotes: _careNotesController.text.trim().isNotEmpty 
+              ? _careNotesController.text.trim() 
+              : null,
         );
       }
       if (mounted) {
+        HapticFeedback.vibrate();
         Navigator.pop(context); // Pop the loader
         _showBookingSuccessSheet(context, finalPay);
       }
@@ -157,47 +164,6 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
   }
 
   List<Map<String, dynamic>> _getEligibleMembers() {
-    final title = widget.serviceTitle.toLowerCase();
-    
-    if (title.contains('post-delivery') || title.contains('postdelivery')) {
-      // Post-delivery: Children under 6 months old
-      return _allMembers.where((m) {
-        final dobStr = m['dob'] ?? m['date_of_birth'];
-        if (dobStr != null) {
-          final dob = DateTime.tryParse(dobStr as String);
-          if (dob != null) {
-            final months = DateTime.now().difference(dob).inDays / 30.0;
-            return months <= 6;
-          }
-        }
-        final age = m['age'] ?? 0;
-        final role = (m['role'] ?? m['relationship'] ?? '').toString().toLowerCase();
-        return age == 0 || role.contains('newborn') || role.contains('baby') || role.contains('infant');
-      }).toList();
-    } else if (title.contains('babysitting')) {
-      // Babysitting: Children under 12 years old
-      return _allMembers.where((m) {
-        final dobStr = m['dob'] ?? m['date_of_birth'];
-        if (dobStr != null) {
-          final dob = DateTime.tryParse(dobStr as String);
-          if (dob != null) {
-            final years = DateTime.now().difference(dob).inDays / 365.25;
-            return years <= 12;
-          }
-        }
-        final age = m['age'] ?? 0;
-        final role = (m['role'] ?? m['relationship'] ?? '').toString().toLowerCase();
-        return age <= 12 || role.contains('child') || role.contains('kid') || role.contains('toddler') || role.contains('baby');
-      }).toList();
-    } else if (title.contains('mobility') || title.contains('elder')) {
-      // Elder care / Mobility: Senior members
-      return _allMembers.where((m) {
-        final age = m['age'] ?? 0;
-        final role = (m['role'] ?? m['relationship'] ?? '').toString().toLowerCase();
-        return age >= 60 || role.contains('father') || role.contains('mother') || role.contains('grand') || role.contains('elder') || role.contains('senior');
-      }).toList();
-    }
-    
     return _allMembers;
   }
 
@@ -205,7 +171,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
     final user = SupabaseService.currentUser;
     if (user != null) {
       _userEmail = user.email ?? '';
-      _userPhone = user.phone ?? '';
+      _userPhone = SupabaseService.currentUserPhone;
       try {
         final profile = await SupabaseService.getUserProfile(user.id);
         if (profile != null) {
@@ -425,7 +391,10 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                         children: [
                           // Back Button (Circular)
                           GestureDetector(
-                            onTap: () => Navigator.pop(context),
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              Navigator.pop(context);
+                            },
                             child: Container(
                               width: 44,
                               height: 44,
@@ -503,6 +472,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                   color: Colors.transparent,
                                   child: InkWell(
                                     onTap: () {
+                                      HapticFeedback.lightImpact();
                                       _showHouseholdMembersBottomSheet(context);
                                     },
                                     borderRadius: BorderRadius.circular(12),
@@ -574,6 +544,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                   color: Colors.transparent,
                                   child: InkWell(
                                     onTap: () {
+                                      HapticFeedback.lightImpact();
                                       Navigator.of(context).push(
                                         MaterialPageRoute(
                                           builder: (context) => const SearchLocationScreen(),
@@ -632,6 +603,83 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                             ),
                                           ),
                                         ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          const SizedBox(height: 20),
+
+                          // Care Notes Card Container
+                          Container(
+                            padding: const EdgeInsets.all(20.0),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(24),
+                              border: Border.all(
+                                color: HestiaColors.primary,
+                                width: 1,
+                              ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x14000000),
+                                  blurRadius: 5,
+                                  offset: Offset(0, 5),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(
+                                      Icons.note_alt_outlined,
+                                      color: HestiaColors.primary,
+                                      size: 20,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Add Care Notes (Optional)',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                        color: HestiaColors.textDark,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _careNotesController,
+                                  maxLines: 3,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: HestiaColors.textDark,
+                                  ),
+                                  decoration: InputDecoration(
+                                    hintText: 'e.g., Baby needs feeding every 2 hours. Keep bedroom temperature at 24°C.',
+                                    hintStyle: const TextStyle(
+                                      fontSize: 13,
+                                      color: HestiaColors.textLight,
+                                    ),
+                                    contentPadding: const EdgeInsets.all(12),
+                                    filled: true,
+                                    fillColor: const Color(0xFFFBFBFB),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(
+                                        color: HestiaColors.inputBorder,
+                                      ),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: const BorderSide(
+                                        color: HestiaColors.primary,
+                                        width: 1.5,
                                       ),
                                     ),
                                   ),
@@ -829,6 +877,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                           child: InkWell(
                             borderRadius: BorderRadius.circular(28),
                             onTap: () {
+                              HapticFeedback.lightImpact();
                               final bool hasRecipient = _patientName.isNotEmpty && _patientName != 'Tap to select';
                               if (!hasRecipient) {
                                 _showHouseholdMembersBottomSheet(context);
@@ -851,7 +900,6 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                                     'name': _userName.isNotEmpty ? _userName : 'Guest User',
                                     'contact': _userPhone.isNotEmpty ? _userPhone : '9876543210',
                                     'email': _userEmail.isNotEmpty ? _userEmail : 'user@example.com',
-                                    'method': 'upi',
                                   },
                                   'external': {
                                     'wallets': ['paytm']
@@ -934,118 +982,122 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       builder: (sheetCtx) {
-        return Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 12),
-              
-              // Success Circle
-              Container(
-                width: 72,
-                height: 72,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFE8F5ED),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.check_circle,
-                  color: Color(0xFF2E6B4A),
-                  size: 44,
-                ),
-              ),
-              const SizedBox(height: 20),
-              
-              const Text(
-                'Booking Confirmed!',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: HestiaColors.textDark,
-                ),
-              ),
-              const SizedBox(height: 16),
-              
-              // Summary details
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: HestiaColors.primary,
-                    width: 1,
+        return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24.0, 12.0, 24.0, 24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                
+                // Success Circle
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFE8F5ED),
+                    shape: BoxShape.circle,
                   ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x14000000),
-                      blurRadius: 5,
-                      offset: Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    _buildSummaryRow(
-                      'Service',
-                      widget.servicesMap != null
-                          ? widget.servicesMap!.keys.join(', ')
-                          : widget.serviceTitle,
-                    ),
-                    const Divider(color: Color(0xFFE5DDD5), height: 16),
-                    _buildSummaryRow('Date', _formatDate(widget.selectedDate)),
-                    const Divider(color: Color(0xFFE5DDD5), height: 16),
-                    _buildSummaryRow(
-                      'Time',
-                      widget.servicesMap != null
-                          ? () {
-                              final totalMins = widget.servicesMap!.values.fold<int>(0, (sum, item) => sum + item);
-                              final double hours = totalMins / 60.0;
-                              final dur = hours % 1 == 0 ? '${hours.toInt()} hrs' : '${hours.toStringAsFixed(1)} hrs';
-                              return '${widget.selectedTime} ($dur)';
-                            }()
-                          : '${widget.selectedTime} (${widget.selectedDuration})',
-                    ),
-                    const Divider(color: Color(0xFFE5DDD5), height: 16),
-                    _buildSummaryRow('Caregiver', widget.selectedProfessionalName),
-                    const Divider(color: Color(0xFFE5DDD5), height: 16),
-                    _buildSummaryRow('Total Paid (Razorpay)', '₹$total'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 28),
-              
-              // Go to home button
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HestiaColors.primary,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(28),
-                    ),
-                    elevation: 0,
-                  ),
-                  onPressed: () {
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (context) => const HomeScreen()),
-                      (route) => false,
-                    );
-                  },
-                  child: const Text(
-                    'Go to Home',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: const Icon(
+                    Icons.check_circle,
+                    color: Color(0xFF2E6B4A),
+                    size: 44,
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-            ],
+                const SizedBox(height: 16),
+                
+                const Text(
+                  'Booking Confirmed!',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: HestiaColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                
+                // Summary details
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: HestiaColors.primary,
+                      width: 1,
+                    ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x14000000),
+                        blurRadius: 5,
+                        offset: Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      _buildSummaryRow(
+                        'Service',
+                        widget.servicesMap != null
+                            ? widget.servicesMap!.keys.join(', ')
+                            : widget.serviceTitle,
+                      ),
+                      const Divider(color: Color(0xFFE5DDD5), height: 16),
+                      _buildSummaryRow('Date', _formatDate(widget.selectedDate)),
+                      const Divider(color: Color(0xFFE5DDD5), height: 16),
+                      _buildSummaryRow(
+                        'Time',
+                        widget.servicesMap != null
+                            ? () {
+                                final totalMins = widget.servicesMap!.values.fold<int>(0, (sum, item) => sum + item);
+                                final double hours = totalMins / 60.0;
+                                final dur = hours % 1 == 0 ? '${hours.toInt()} hrs' : '${hours.toStringAsFixed(1)} hrs';
+                                return '${widget.selectedTime} ($dur)';
+                              }()
+                            : '${widget.selectedTime} (${widget.selectedDuration})',
+                      ),
+                      const Divider(color: Color(0xFFE5DDD5), height: 16),
+                      _buildSummaryRow('Caregiver', widget.selectedProfessionalName),
+                      const Divider(color: Color(0xFFE5DDD5), height: 16),
+                      _buildSummaryRow('Total Paid (Razorpay)', '₹$total'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                
+                // Go to home button
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: HestiaColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(28),
+                      ),
+                      elevation: 0,
+                    ),
+                    onPressed: () {
+                      HapticFeedback.lightImpact();
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (context) => const HomeScreen()),
+                        (route) => false,
+                      );
+                    },
+                    child: const Text(
+                      'Go to Home',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ),
           ),
         );
       },
@@ -1144,9 +1196,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                             Text(
                               serviceName.toLowerCase().contains('post-delivery') || serviceName.toLowerCase().contains('postdelivery')
                                   ? 'Post-delivery care requires children under 6 months old.'
-                                  : serviceName.toLowerCase().contains('babysitting')
-                                      ? 'Babysitting requires children under 12 years old.'
-                                      : 'Add members to your household list below.',
+                                  : 'No household members match the requirements for this service.',
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: 12,
@@ -1268,6 +1318,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                         ),
                       ),
                       onPressed: () {
+                        HapticFeedback.lightImpact();
                         _showAddMemberDialog(sheetCtx, setSheetState);
                       },
                       icon: const Icon(Icons.add, color: HestiaColors.primary),
@@ -1293,229 +1344,241 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
   void _showAddMemberDialog(BuildContext sheetContext, StateSetter setSheetState) {
     final nameController = TextEditingController();
     final ageController = TextEditingController();
-    final roleController = TextEditingController();
+    String? selectedRole = 'Post-Delivery Care';
     final formKey = GlobalKey<FormState>();
 
     showDialog(
       context: sheetContext,
       builder: (dialogCtx) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: const Text(
-            'Add Household Member',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: HestiaColors.textDark,
-            ),
-          ),
-          content: Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'MEMBER NAME',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: HestiaColors.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: nameController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Meera',
-                      filled: true,
-                      fillColor: const Color(0xFFF7F9FC),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter a name';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'AGE (YEARS)',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: HestiaColors.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Enter age. For babies under 1 year, enter 0.',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      color: HestiaColors.textLight,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: ageController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. 0 for newborn, 4 for child',
-                      filled: true,
-                      fillColor: const Color(0xFFF7F9FC),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter age';
-                      }
-                      final age = int.tryParse(value);
-                      if (age == null || age < 0) {
-                        return 'Please enter a valid age';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'ROLE / CARE REASON',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: HestiaColors.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: roleController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Newborn, Infant, Toddler',
-                      filled: true,
-                      fillColor: const Color(0xFFF7F9FC),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter relationship or role';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
+        return StatefulBuilder(
+          builder: (dialogCtx, setDialogState) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
               ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx),
-              child: const Text('Cancel', style: TextStyle(color: HestiaColors.textMedium)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: HestiaColors.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              title: const Text(
+                'Add Household Member',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: HestiaColors.textDark,
+                ),
               ),
-              onPressed: () async {
-                if (formKey.currentState!.validate()) {
-                  final age = int.parse(ageController.text);
-                  final name = nameController.text.trim();
-                  final role = roleController.text.trim();
-                  
-                  // Pop add member dialog immediately
-                  Navigator.pop(dialogCtx);
-                  
-                  // Show loading spinner on sheet
-                  showDialog(
-                    context: sheetContext,
-                    barrierDismissible: false,
-                    builder: (ctx) => const Center(
-                      child: CircularProgressIndicator(color: HestiaColors.primary),
-                    ),
-                  );
-
-                  try {
-                    final user = SupabaseService.currentUser;
-                    if (user != null) {
-                      final dob = DateTime.now().subtract(Duration(days: age * 365)).toIso8601String().substring(0, 10);
+              content: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'MEMBER NAME',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: nameController,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. Meera',
+                          filled: true,
+                          fillColor: const Color(0xFFF7F9FC),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter a name';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'AGE (YEARS)',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Enter age. For babies under 1 year, enter 0.',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: HestiaColors.textLight,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: ageController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. 0 for newborn, 4 for child',
+                          filled: true,
+                          fillColor: const Color(0xFFF7F9FC),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter age';
+                          }
+                          final age = int.tryParse(value);
+                          if (age == null || age < 0) {
+                            return 'Please enter a valid age';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'SERVICE PREFERRED',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      DropdownButtonFormField<String>(
+                        value: selectedRole,
+                        hint: const Text('Select service preferred'),
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: const Color(0xFFF7F9FC),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                          ),
+                        ),
+                        items: [
+                          'Post-Delivery Care',
+                          'Mobility Support',
+                          'Elder Care',
+                          'Babysitting',
+                          'Other',
+                        ].map((val) => DropdownMenuItem(
+                          value: val,
+                          child: Text(val),
+                        )).toList(),
+                        onChanged: (val) {
+                          setDialogState(() {
+                            selectedRole = val;
+                          });
+                        },
+                        validator: (val) => val == null ? 'Select service preferred' : null,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: const Text('Cancel', style: TextStyle(color: HestiaColors.textMedium)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: HestiaColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () async {
+                    if (formKey.currentState!.validate()) {
+                      final age = int.parse(ageController.text);
+                      final name = nameController.text.trim();
+                      final role = selectedRole ?? 'Other';
                       
-                      // 1. Insert into Supabase household_members table
-                      final newMemberRes = await SupabaseService.client.from('household_members').insert({
-                        'user_id': user.id,
-                        'name': name,
-                        'relationship': role,
-                        'date_of_birth': dob,
-                        'primary_service_need': widget.serviceTitle.toLowerCase().contains('post-delivery') || widget.serviceTitle.toLowerCase().contains('postdelivery')
-                            ? 'post_delivery_care'
-                            : 'certified_babysitting',
-                      }).select('id, name, relationship, date_of_birth').single();
-
-                      final addedMember = {
-                        'id': newMemberRes['id'],
-                        'name': newMemberRes['name'],
-                        'role': newMemberRes['relationship'],
-                        'age': age,
-                        'dob': newMemberRes['date_of_birth'],
-                      };
-
-                      // Update local states
-                      setState(() {
-                        _allMembers.add(addedMember);
-                        _patientName = role.isNotEmpty ? '$name ($role)' : name;
-                        _selectedMemberId = newMemberRes['id'] as String?;
-                      });
-
-                      setSheetState(() {
-                        // Refresh bottom sheet list
-                      });
+                      // Pop add member dialog immediately
+                      Navigator.pop(dialogCtx);
                       
-                      // Update legacy profile JSON
-                      try {
-                        final profileData = await SupabaseService.downloadProfileJson(user.id) ?? {};
-                        final existingMembers = List<dynamic>.from(profileData['household_members'] ?? []);
-                        existingMembers.add({
-                          'name': name,
-                          'role': role,
-                          'age': age,
-                        });
-                        profileData['household_members'] = existingMembers;
-                        await SupabaseService.uploadProfileJson(id: user.id, profileData: profileData);
-                      } catch (e) {
-                        debugPrint('Failed to update legacy JSON: $e');
-                      }
-                    }
-                  } catch (e) {
-                    debugPrint('Error inserting household member: $e');
-                    if (sheetContext.mounted) {
-                      ScaffoldMessenger.of(sheetContext).showSnackBar(
-                        SnackBar(content: Text('Failed to add member: $e')),
+                      // Show loading spinner on sheet
+                      showDialog(
+                        context: sheetContext,
+                        barrierDismissible: false,
+                        builder: (ctx) => const Center(
+                          child: CircularProgressIndicator(color: HestiaColors.primary),
+                        ),
                       );
+
+                      try {
+                        final user = SupabaseService.currentUser;
+                        if (user != null) {
+                          final dob = DateTime.now().subtract(Duration(days: age * 365)).toIso8601String().substring(0, 10);
+                          
+                          // 1. Insert into Supabase household_members table
+                          final newMemberRes = await SupabaseService.client.from('household_members').insert({
+                            'user_id': user.id,
+                            'name': name,
+                            'relationship': role,
+                            'date_of_birth': dob,
+                            'primary_service_need': SupabaseService.mapReasonToServicePillar(role),
+                          }).select('id, name, relationship, date_of_birth').single();
+
+                          final addedMember = {
+                            'id': newMemberRes['id'],
+                            'name': newMemberRes['name'],
+                            'role': newMemberRes['relationship'],
+                            'age': age,
+                            'dob': newMemberRes['date_of_birth'],
+                          };
+
+                          // Update local states
+                          setState(() {
+                            _allMembers.add(addedMember);
+                            _patientName = role.isNotEmpty ? '$name ($role)' : name;
+                            _selectedMemberId = newMemberRes['id'] as String?;
+                          });
+
+                          setSheetState(() {
+                            // Refresh bottom sheet list
+                          });
+                          
+                          // Update legacy profile JSON
+                          try {
+                            final profileData = await SupabaseService.downloadProfileJson(user.id) ?? {};
+                            final existingMembers = List<dynamic>.from(profileData['household_members'] ?? []);
+                            existingMembers.add({
+                              'name': name,
+                              'role': role,
+                              'age': age,
+                            });
+                            profileData['household_members'] = existingMembers;
+                            await SupabaseService.uploadProfileJson(id: user.id, profileData: profileData);
+                          } catch (e) {
+                            debugPrint('Failed to update legacy JSON: $e');
+                          }
+                        }
+                      } catch (e) {
+                        debugPrint('Error inserting household member: $e');
+                        if (sheetContext.mounted) {
+                          ScaffoldMessenger.of(sheetContext).showSnackBar(
+                            SnackBar(content: Text('Failed to add member: $e')),
+                          );
+                        }
+                      } finally {
+                        // Pop loading spinner
+                        if (sheetContext.mounted) {
+                          Navigator.pop(sheetContext);
+                        }
+                      }
                     }
-                  } finally {
-                    // Pop loading spinner
-                    if (sheetContext.mounted) {
-                      Navigator.pop(sheetContext);
-                    }
-                  }
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
+                  },
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
         );
       },
     );

@@ -650,7 +650,9 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
         };
         if (widget.isPostSignInJourney) {
           final fullName = user.userMetadata?['full_name'] ?? 'User';
-          final phone = user.phone ?? user.userMetadata?['phone'];
+          final phone = SupabaseService.currentUserPhone.isNotEmpty
+              ? SupabaseService.currentUserPhone
+              : null;
           final email = user.userMetadata?['email'] ?? user.email ?? '';
 
           await SupabaseService.saveUserProfile(

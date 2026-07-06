@@ -81,7 +81,10 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
         Map<String, dynamic>? profileData = await SupabaseService.getUserProfile(user.id);
         if (profileData != null && mounted) {
           setState(() {
-            _phone = profileData['phone'] ?? user.phone ?? user.userMetadata?['phone'] ?? '';
+            final authPhone = SupabaseService.currentUserPhone;
+            _phone = (profileData['phone'] as String?)?.isNotEmpty == true
+                ? profileData['phone'] as String
+                : authPhone;
           });
         }
       } catch (e) {
@@ -592,32 +595,39 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                                           Row(
                                             crossAxisAlignment: CrossAxisAlignment.center,
                                             children: [
-                                              Text(
-                                                label ?? 'Address',
-                                                style: const TextStyle(
-                                                  fontSize: 16,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Color(0xFF5E3D1D),
+                                              Expanded(
+                                                child: Wrap(
+                                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                                  spacing: 8,
+                                                  runSpacing: 4,
+                                                  children: [
+                                                    Text(
+                                                      label ?? 'Address',
+                                                      style: const TextStyle(
+                                                        fontSize: 16,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: Color(0xFF5E3D1D),
+                                                      ),
+                                                    ),
+                                                    if (isPrimary)
+                                                      Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                        decoration: BoxDecoration(
+                                                          color: const Color(0xFFFAF2EB),
+                                                          borderRadius: BorderRadius.circular(8),
+                                                        ),
+                                                        child: const Text(
+                                                          'Currently selected',
+                                                          style: TextStyle(
+                                                            color: HestiaColors.primary,
+                                                            fontSize: 11,
+                                                            fontWeight: FontWeight.w600,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                  ],
                                                 ),
                                               ),
-                                              const SizedBox(width: 8),
-                                              if (isPrimary)
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(0xFFFAF2EB),
-                                                    borderRadius: BorderRadius.circular(8),
-                                                  ),
-                                                  child: const Text(
-                                                    'Currently selected',
-                                                    style: TextStyle(
-                                                      color: HestiaColors.primary,
-                                                      fontSize: 11,
-                                                      fontWeight: FontWeight.w600,
-                                                    ),
-                                                  ),
-                                                ),
-                                              const Spacer(),
                                               PopupMenuButton<String>(
                                                 icon: const Icon(
                                                   Icons.more_vert,
@@ -818,7 +828,10 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
     final user = SupabaseService.currentUser;
     if (user != null) {
       final fullName = user.userMetadata?['full_name'] ?? 'User';
-      final phone = user.phone ?? user.userMetadata?['phone'] ?? (_phone.isNotEmpty ? _phone : null);
+      final authPhone = SupabaseService.currentUserPhone;
+      final phone = authPhone.isNotEmpty
+          ? authPhone
+          : (_phone.isNotEmpty ? _phone : null);
       final email = user.userMetadata?['email'] ?? user.email ?? '';
 
       final addressToSave = _useFallbackMock || _dbAddress == null

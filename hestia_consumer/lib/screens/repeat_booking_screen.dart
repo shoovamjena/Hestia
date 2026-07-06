@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/colors.dart';
 import 'choose_professional_screen.dart';
 import 'time_slot_bottom_sheet.dart';
@@ -255,7 +256,10 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                   children: [
                     // Back Button (Circular)
                     GestureDetector(
-                      onTap: () => Navigator.pop(context),
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        Navigator.pop(context);
+                      },
                       child: Container(
                         width: 44,
                         height: 44,
@@ -662,6 +666,7 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                         borderRadius: BorderRadius.circular(28),
                         onTap: _canContinue
                             ? () {
+                                HapticFeedback.lightImpact();
                                 Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (context) =>

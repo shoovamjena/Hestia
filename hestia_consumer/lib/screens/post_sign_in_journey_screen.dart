@@ -211,7 +211,7 @@ class _HouseholdIntroPage extends StatefulWidget {
 }
 
 class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
-  String _selectedReason = 'New mother';
+  String _selectedReason = 'Post-Delivery Care';
   final List<Map<String, dynamic>> _members = [];
 
   // Helper to determine emoji based on age
@@ -235,175 +235,189 @@ class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
   void _showAddMemberDialog() {
     final nameController = TextEditingController();
     final ageController = TextEditingController();
-    final roleController = TextEditingController();
+    String? selectedRole = 'Post-Delivery Care';
     final formKey = GlobalKey<FormState>();
 
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: HestiaColors.background,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: const Text(
-            'Add Household Member',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: HestiaColors.textDark,
-            ),
-          ),
-          content: Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'MEMBER NAME',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: HestiaColors.textAccent,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: nameController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Meera',
-                      filled: true,
-                      fillColor: HestiaColors.inputBackground,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter a name';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'AGE (YEARS)',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: HestiaColors.textAccent,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: ageController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. 68',
-                      filled: true,
-                      fillColor: HestiaColors.inputBackground,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter age';
-                      }
-                      final age = int.tryParse(value);
-                      if (age == null || age < 0) {
-                        return 'Please enter a valid age';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'ROLE / CARE REASON',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: HestiaColors.textAccent,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  TextFormField(
-                    controller: roleController,
-                    decoration: InputDecoration(
-                      hintText: 'e.g. Grandmother / Mobility Support',
-                      filled: true,
-                      fillColor: HestiaColors.inputBackground,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter relationship or role';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: HestiaColors.background,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
               ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: HestiaColors.textMedium)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: HestiaColors.primary,
-                foregroundColor: HestiaColors.buttonText,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              title: const Text(
+                'Add Household Member',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: HestiaColors.textDark,
+                ),
               ),
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
-                  final age = int.parse(ageController.text);
-                  setState(() {
-                    _members.add({
-                      'name': nameController.text.trim(),
-                      'age': age,
-                      'role': roleController.text.trim(),
-                    });
-                  });
-                  Navigator.pop(context);
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
+              content: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'MEMBER NAME',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.textAccent,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: nameController,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. Meera',
+                          filled: true,
+                          fillColor: HestiaColors.inputBackground,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter a name';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'AGE (YEARS)',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.textAccent,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      TextFormField(
+                        controller: ageController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. 68',
+                          filled: true,
+                          fillColor: HestiaColors.inputBackground,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                          ),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter age';
+                          }
+                          final age = int.tryParse(value);
+                          if (age == null || age < 0) {
+                            return 'Please enter a valid age';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'SERVICE PREFERRED',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.textAccent,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      DropdownButtonFormField<String>(
+                        value: selectedRole,
+                        hint: const Text('Select service preferred'),
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: HestiaColors.inputBackground,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                          ),
+                        ),
+                        items: [
+                          'Post-Delivery Care',
+                          'Mobility Support',
+                          'Elder Care',
+                          'Babysitting',
+                          'Other',
+                        ].map((val) => DropdownMenuItem(
+                          value: val,
+                          child: Text(val),
+                        )).toList(),
+                        onChanged: (val) {
+                          setDialogState(() {
+                            selectedRole = val;
+                          });
+                        },
+                        validator: (val) => val == null ? 'Select service preferred' : null,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: HestiaColors.textMedium)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: HestiaColors.primary,
+                    foregroundColor: HestiaColors.buttonText,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    if (formKey.currentState!.validate()) {
+                      final age = int.parse(ageController.text);
+                      setState(() {
+                        _members.add({
+                          'name': nameController.text.trim(),
+                          'age': age,
+                          'role': selectedRole ?? 'Other',
+                        });
+                      });
+                      Navigator.pop(context);
+                    }
+                  },
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -451,7 +465,7 @@ class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'PRIMARY REASON FOR CARE',
+              'SERVICE PREFERRED',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
@@ -464,10 +478,10 @@ class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                'New mother',
-                'Post-surgery',
-                'Elderly care',
-                'Childcare',
+                'Post-Delivery Care',
+                'Mobility Support',
+                'Elder Care',
+                'Babysitting',
                 'Other',
               ].map((reason) {
                 final isSelected = _selectedReason == reason;
