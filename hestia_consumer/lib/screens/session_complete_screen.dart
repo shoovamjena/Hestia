@@ -69,17 +69,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
     final durationText = _buildDurationText(actualStartObj, actualEndObj, widget.bookingData['duration_hours']);
 
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment(0.0, 0.4),
-          colors: [
-            Color.fromARGB(255, 94, 61, 29),
-            Color.fromARGB(255, 139, 106, 65),
-            Color.fromARGB(255, 252, 252, 252),
-          ],
-        ),
-      ),
+        color: HestiaColors.appBackground,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -89,7 +79,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
           title: const Text(
             'Session complete',
             style: TextStyle(
-              color: Colors.white,
+              color: HestiaColors.textDark,
               fontSize: 20,
               fontWeight: FontWeight.bold,
             ),

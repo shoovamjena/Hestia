@@ -4,6 +4,7 @@ class HestiaColors {
   // Primary colors
   static const Color primary = Color(0xFF6F4E37); // Warm chocolate brown
   static const Color background = Color(0xFFFFFFFF);
+  static const Color appBackground = Color(0xFFFCFCFC);
   static const Color surface = Color(0xFFFFFFFF);
   
   // Text colors

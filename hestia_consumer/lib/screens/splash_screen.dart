@@ -86,17 +86,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment(0.0, 0.4),
-          colors: [
-            Color.fromARGB(255, 94, 61, 29),
-            Color.fromARGB(255, 139, 106, 65),
-            Color.fromARGB(255, 252, 252, 252),
-          ],
-        ),
-      ),
+        color: HestiaColors.appBackground,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: Center(

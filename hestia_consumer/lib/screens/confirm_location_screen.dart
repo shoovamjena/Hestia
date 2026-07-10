@@ -757,17 +757,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     const textDark = Color(0xFF1E1E1E);
 
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment(0.0, 0.4),
-          colors: [
-            Color.fromARGB(255, 94, 61, 29),
-            Color.fromARGB(255, 139, 106, 65),
-            Color.fromARGB(255, 252, 252, 252),
-          ],
-        ),
-      ),
+        color: HestiaColors.appBackground,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -775,7 +765,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
           elevation: 0,
           scrolledUnderElevation: 0,
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white, size: 24),
+            icon: const Icon(Icons.arrow_back, color: HestiaColors.textDark, size: 24),
             onPressed: () => Navigator.pop(context),
           ),
           title: Text(
@@ -786,7 +776,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
               fontFamily: 'Outfit',
               fontSize: 20,
               fontWeight: FontWeight.w600,
-              color: Colors.white,
+              color: HestiaColors.textDark,
             ),
           ),
           titleSpacing: 0,

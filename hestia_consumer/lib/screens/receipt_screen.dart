@@ -43,17 +43,7 @@ class ReceiptScreen extends StatelessWidget {
     }
 
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment(0.0, 0.4),
-          colors: [
-            Color.fromARGB(255, 94, 61, 29),
-            Color.fromARGB(255, 139, 106, 65),
-            Color.fromARGB(255, 252, 252, 252),
-          ],
-        ),
-      ),
+        color: HestiaColors.appBackground,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -83,13 +73,13 @@ class ReceiptScreen extends StatelessWidget {
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: Colors.white,
+              color: HestiaColors.textDark,
             ),
           ),
           centerTitle: true,
           actions: [
             IconButton(
-              icon: const Icon(Icons.share_outlined, color: Colors.white),
+              icon: const Icon(Icons.share_outlined, color: HestiaColors.textDark),
               onPressed: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(

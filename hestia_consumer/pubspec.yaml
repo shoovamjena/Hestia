@@ -72,6 +72,14 @@ flutter:
     - assets/images/onboarding_2.png
     - assets/images/onboarding_3.png
     - assets/images/services/
+    - assets/images/services/details/
+    - assets/images/services/steps/
+    - assets/images/services/steps/post_delivery/
+    - assets/images/services/steps/babysitting/
+    - assets/images/services/steps/mobility/
+    - assets/images/services/steps/pre_pregnancy/
+    - assets/images/services/steps/bathing/
+    - assets/images/services/steps/concierge/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

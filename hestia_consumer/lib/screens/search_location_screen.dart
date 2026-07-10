@@ -209,17 +209,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
     }
 
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment(0.0, 0.4),
-          colors: [
-            Color.fromARGB(255, 94, 61, 29),
-            Color.fromARGB(255, 139, 106, 65),
-            Color.fromARGB(255, 252, 252, 252),
-          ],
-        ),
-      ),
+        color: HestiaColors.appBackground,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -227,7 +217,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
           elevation: 0,
           scrolledUnderElevation: 0,
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white, size: 24),
+            icon: const Icon(Icons.arrow_back, color: HestiaColors.textDark, size: 24),
             onPressed: () => Navigator.pop(context),
           ),
           title: const Text(
@@ -236,7 +226,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
               fontFamily: 'Outfit',
               fontSize: 20,
               fontWeight: FontWeight.w600,
-              color: Colors.white,
+              color: HestiaColors.textDark,
             ),
           ),
           titleSpacing: 0,

@@ -976,17 +976,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Widget _buildBookingsTab() {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment(0.0, 0.4),
-          colors: [
-            Color.fromARGB(255, 94, 61, 29),
-            Color.fromARGB(255, 139, 106, 65),
-            Color.fromARGB(255, 252, 252, 252),
-          ],
-        ),
-      ),
+      color: HestiaColors.appBackground,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -999,7 +989,7 @@ class _HomeScreenState extends State<HomeScreen>
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: Colors.white,
+              color: HestiaColors.textDark,
             ),
           ),
           centerTitle: true,
@@ -1950,17 +1940,7 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildHomeTab() {
     return SingleChildScrollView(
       child: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment(0.0, 0.4),
-            colors: [
-              Color.fromARGB(255, 94, 61, 29), // Light warm tan/mocha
-              Color.fromARGB(255, 139, 106, 65), // Soft warm apricot/cream
-              Color.fromARGB(255, 252, 252, 252), // Light pale cream/yellow
-            ],
-          ),
-        ),
+        color: HestiaColors.appBackground,
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(
@@ -1970,79 +1950,44 @@ class _HomeScreenState extends State<HomeScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Top greeting
+                // Top bar
                 Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'HESTIA',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 3,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'WELCOME',
-                            style: TextStyle(
-                              color: HestiaColors.inputBorder,
-                              fontSize: 32,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.5,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _userName.toUpperCase(),
-                            style: const TextStyle(
-                              color: Color(0xFFF9EFE3),
-                              fontSize: 24,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.5,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          GestureDetector(
-                            onTap: () {
-                              Navigator.of(context)
-                                  .push(
-                                    MaterialPageRoute(
-                                      builder: (context) =>
-                                          const SearchLocationScreen(),
-                                    ),
-                                  )
-                                  .then((_) => _loadProfileData());
-                            },
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.location_on,
-                                  color: Colors.white70,
-                                  size: 14,
+                      child: GestureDetector(
+                        onTap: () {
+                          Navigator.of(context)
+                              .push(
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      const SearchLocationScreen(),
                                 ),
-                                const SizedBox(width: 4),
-                                Flexible(
-                                  child: Text(
-                                    _location,
-                                    style: const TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 13,
-                                      decoration: TextDecoration.underline,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
+                              )
+                              .then((_) => _loadProfileData());
+                        },
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.location_on,
+                              color: HestiaColors.primary,
+                              size: 14,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                _location,
+                                style: const TextStyle(
+                                  color: HestiaColors.textMedium,
+                                  fontSize: 13,
+                                  decoration: TextDecoration.underline,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     Row(
@@ -2593,7 +2538,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     return Scaffold(
       extendBody: true,
-      backgroundColor: const Color.fromARGB(255, 252, 252, 252),
+      backgroundColor: HestiaColors.appBackground,
       body: Stack(
         children: [
           _buildBody(),

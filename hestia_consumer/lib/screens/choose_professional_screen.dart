@@ -209,17 +209,7 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
     return Scaffold(
       backgroundColor: const Color.fromARGB(255, 252, 252, 252),
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment(0.0, 0.4),
-            colors: [
-              Color.fromARGB(255, 94, 61, 29),
-              Color.fromARGB(255, 139, 106, 65),
-              Color.fromARGB(255, 252, 252, 252),
-            ],
-          ),
-        ),
+        color: HestiaColors.appBackground,
         child: SafeArea(
           child: Column(
             children: [

@@ -70,17 +70,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment(0.0, 0.4),
-          colors: [
-            Color.fromARGB(255, 94, 61, 29),
-            Color.fromARGB(255, 139, 106, 65),
-            Color.fromARGB(255, 252, 252, 252),
-          ],
-        ),
-      ),
+        color: HestiaColors.appBackground,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
@@ -102,7 +92,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 child: const Icon(
                   Icons.chevron_left_rounded,
-                  color: Colors.white,
+                  color: HestiaColors.textDark,
                   size: 20,
                 ),
               ),
@@ -113,7 +103,7 @@ class _ChatScreenState extends State<ChatScreen> {
             style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: Colors.white,
+              color: HestiaColors.textDark,
             ),
           ),
           centerTitle: true,

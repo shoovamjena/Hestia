@@ -152,8 +152,12 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     if (key.contains('babysitting')) return ServiceDetailScreen.servicesData['babysitting'];
     if (key.contains('mobility')) return ServiceDetailScreen.servicesData['mobility'];
     if (key.contains('prepregnancy')) return ServiceDetailScreen.servicesData['pre-pregnancy'];
-    if (key.contains('bathing')) return ServiceDetailScreen.servicesData['bathing'];
-    if (key.contains('concierge')) return ServiceDetailScreen.servicesData['concierge'];
+    if (key.contains('bathing') || key.contains('grooming')) {
+      return ServiceDetailScreen.servicesData['bathing'];
+    }
+    if (key.contains('concierge') || key.contains('administrative')) {
+      return ServiceDetailScreen.servicesData['concierge'];
+    }
     return null;
   }
 
@@ -217,17 +221,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment(0.0, 0.4),
-            colors: [
-              Color.fromARGB(255, 94, 61, 29),
-              Color.fromARGB(255, 139, 106, 65),
-              Color.fromARGB(255, 252, 252, 252),
-            ],
-          ),
-        ),
+        color: HestiaColors.appBackground,
         child: SafeArea(
           child: Column(
             children: [
@@ -237,7 +231,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    icon: const Icon(Icons.arrow_back, color: HestiaColors.textDark),
                     onPressed: () {
                       HapticFeedback.lightImpact();
                       Navigator.pop(context);
@@ -249,7 +243,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      color: HestiaColors.textDark,
                     ),
                   ),
                 ],

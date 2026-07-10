@@ -5,12 +5,12 @@ import 'schedule_screen.dart';
 class ServiceStep {
   final String title;
   final String description;
-  final IconData icon;
+  final String iconAsset;
 
   const ServiceStep({
     required this.title,
     required this.description,
-    required this.icon,
+    required this.iconAsset,
   });
 }
 
@@ -33,7 +33,7 @@ class ServiceDetail {
   final String originalPrice;
   final String rating;
   final String ratingCount;
-  final String imageUrl;
+  final String detailImageAsset;
   final String iconAsset;
   final List<String> whatsIncluded;
   final List<String> doesNotInclude;
@@ -49,7 +49,7 @@ class ServiceDetail {
     required this.originalPrice,
     required this.rating,
     required this.ratingCount,
-    required this.imageUrl,
+    required this.detailImageAsset,
     required this.iconAsset,
     required this.whatsIncluded,
     required this.doesNotInclude,
@@ -84,7 +84,7 @@ class ServiceDetailScreen extends StatefulWidget {
       originalPrice: '₹799',
       rating: '4.9',
       ratingCount: '(12.4k ratings)',
-      imageUrl: 'https://images.unsplash.com/photo-1555252333-9f8e92e65df9?q=80&w=600',
+      detailImageAsset: 'assets/images/services/details/post_delivery.png',
       iconAsset: 'assets/images/services/post_delivery.png',
       whatsIncluded: [
         'Newborn bathing, skin care & swaddling',
@@ -103,22 +103,22 @@ class ServiceDetailScreen extends StatefulWidget {
         ServiceStep(
           title: 'Initial Consultation',
           description: 'Assessing mother & newborn needs for the session',
-          icon: Icons.chat_bubble_outline,
+          iconAsset: 'assets/images/services/steps/post_delivery/step_1.png',
         ),
         ServiceStep(
           title: 'Newborn Care & Bathing',
           description: 'Safe bathing, grooming, and swaddling of the baby',
-          icon: Icons.child_care,
+          iconAsset: 'assets/images/services/steps/post_delivery/step_2.png',
         ),
         ServiceStep(
           title: 'Mother Recovery Support',
           description: 'Assisting with posture, meals, and recovery exercises',
-          icon: Icons.health_and_safety,
+          iconAsset: 'assets/images/services/steps/post_delivery/step_3.png',
         ),
         ServiceStep(
           title: 'Logging & Summary',
           description: 'Documenting feed times, sleep, and logs',
-          icon: Icons.assignment_outlined,
+          iconAsset: 'assets/images/services/steps/post_delivery/step_4.png',
         ),
       ],
       faqs: [
@@ -145,7 +145,7 @@ class ServiceDetailScreen extends StatefulWidget {
       originalPrice: '₹599',
       rating: '4.8',
       ratingCount: '(18.2k ratings)',
-      imageUrl: 'https://images.unsplash.com/photo-1502086223501-7ea6ecd79368?q=80&w=600',
+      detailImageAsset: 'assets/images/services/details/babysitting.png',
       iconAsset: 'assets/images/services/babysitting.png',
       whatsIncluded: [
         'Age-appropriate playtime & creative activities',
@@ -164,22 +164,22 @@ class ServiceDetailScreen extends StatefulWidget {
         ServiceStep(
           title: 'Introduction & Handover',
           description: 'Meeting the child and understanding parents\' guidelines',
-          icon: Icons.handshake_outlined,
+          iconAsset: 'assets/images/services/steps/babysitting/step_1.png',
         ),
         ServiceStep(
           title: 'Active Playtime',
           description: 'Interactive games, drawing, and reading books',
-          icon: Icons.sports_esports_outlined,
+          iconAsset: 'assets/images/services/steps/babysitting/step_2.png',
         ),
         ServiceStep(
           title: 'Meal & Routine',
           description: 'Feeding prepared food and managing nap schedule',
-          icon: Icons.restaurant_menu,
+          iconAsset: 'assets/images/services/steps/babysitting/step_3.png',
         ),
         ServiceStep(
           title: 'Area Tidying',
           description: 'Putting away toys and leaving the room clean',
-          icon: Icons.cleaning_services_outlined,
+          iconAsset: 'assets/images/services/steps/babysitting/step_4.png',
         ),
       ],
       faqs: [
@@ -206,7 +206,7 @@ class ServiceDetailScreen extends StatefulWidget {
       originalPrice: '₹699',
       rating: '4.9',
       ratingCount: '(9.8k ratings)',
-      imageUrl: 'https://images.unsplash.com/photo-1576765608535-5f04d1e3f289?q=80&w=600',
+      detailImageAsset: 'assets/images/services/details/mobility.png',
       iconAsset: 'assets/images/services/mobility.png',
       whatsIncluded: [
         'Assistance with transfers (bed to chair, etc.)',
@@ -225,22 +225,22 @@ class ServiceDetailScreen extends StatefulWidget {
         ServiceStep(
           title: 'Warmup & Safety Check',
           description: 'Checking client comfort and walking aids condition',
-          icon: Icons.security,
+          iconAsset: 'assets/images/services/steps/mobility/step_1.png',
         ),
         ServiceStep(
           title: 'Guided Movement',
           description: 'Assisting with walks in/around the house safely',
-          icon: Icons.directions_walk,
+          iconAsset: 'assets/images/services/steps/mobility/step_2.png',
         ),
         ServiceStep(
           title: 'Exercise & Stretching',
           description: 'Conducting prescribed exercises or gentle stretches',
-          icon: Icons.accessibility_new,
+          iconAsset: 'assets/images/services/steps/mobility/step_3.png',
         ),
         ServiceStep(
           title: 'Companionship Pause',
           description: 'Relaxing with tea, books, or warm conversation',
-          icon: Icons.coffee,
+          iconAsset: 'assets/images/services/steps/mobility/step_4.png',
         ),
       ],
       faqs: [
@@ -267,7 +267,7 @@ class ServiceDetailScreen extends StatefulWidget {
       originalPrice: '₹899',
       rating: '4.7',
       ratingCount: '(5.1k ratings)',
-      imageUrl: 'https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?q=80&w=600',
+      detailImageAsset: 'assets/images/services/details/pre_pregnancy.png',
       iconAsset: 'assets/images/services/pre_pregnancy.png',
       whatsIncluded: [
         'Personalized birth planning & consultation',
@@ -285,22 +285,22 @@ class ServiceDetailScreen extends StatefulWidget {
         ServiceStep(
           title: 'Goal Setting',
           description: 'Understanding the maternal timeline and target areas',
-          icon: Icons.track_changes,
+          iconAsset: 'assets/images/services/steps/pre_pregnancy/step_1.png',
         ),
         ServiceStep(
           title: 'Nutrition & Planning',
           description: 'Structuring diet and drafting birth plans',
-          icon: Icons.menu_book,
+          iconAsset: 'assets/images/services/steps/pre_pregnancy/step_2.png',
         ),
         ServiceStep(
           title: 'Gentle Exercise',
           description: 'Breathing exercises and pregnancy safe stretches',
-          icon: Icons.self_improvement,
+          iconAsset: 'assets/images/services/steps/pre_pregnancy/step_3.png',
         ),
         ServiceStep(
           title: 'Nursery Check',
           description: 'Reviewing nursery layout and items checklist',
-          icon: Icons.home_outlined,
+          iconAsset: 'assets/images/services/steps/pre_pregnancy/step_4.png',
         ),
       ],
       faqs: [
@@ -319,7 +319,7 @@ class ServiceDetailScreen extends StatefulWidget {
       ],
     ),
     'bathing': const ServiceDetail(
-      title: 'Bathing Assistance',
+      title: 'Bathing and Grooming',
       category: 'PERSONAL CARE',
       tagline: 'Dignified and safe personal hygiene support',
       description: 'Maintain personal hygiene with comfort and dignity. Our care providers ensure a safe bathing environment, assisting with bathroom transfers, washing, drying, and skin moisturizing.',
@@ -327,7 +327,7 @@ class ServiceDetailScreen extends StatefulWidget {
       originalPrice: '₹499',
       rating: '4.8',
       ratingCount: '(7.6k ratings)',
-      imageUrl: 'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?q=80&w=600',
+      detailImageAsset: 'assets/images/services/details/bathing.png',
       iconAsset: 'assets/images/services/bathing.png',
       whatsIncluded: [
         'Safe transfers in & out of bath area',
@@ -345,22 +345,22 @@ class ServiceDetailScreen extends StatefulWidget {
         ServiceStep(
           title: 'Setup & Warmup',
           description: 'Preparing the bathroom, adjusting water temperature',
-          icon: Icons.thermostat,
+          iconAsset: 'assets/images/services/steps/bathing/step_1.png',
         ),
         ServiceStep(
           title: 'Safe Transfer',
           description: 'Assisting the client into the bath area safely',
-          icon: Icons.sensor_door_outlined,
+          iconAsset: 'assets/images/services/steps/bathing/step_2.png',
         ),
         ServiceStep(
           title: 'Bathing & Washing',
           description: 'Respectful and thorough cleansing of body and hair',
-          icon: Icons.bathtub_outlined,
+          iconAsset: 'assets/images/services/steps/bathing/step_3.png',
         ),
         ServiceStep(
           title: 'Drying & Dressing',
           description: 'Drying, moisturizing, and assisting with clean clothes',
-          icon: Icons.checkroom,
+          iconAsset: 'assets/images/services/steps/bathing/step_4.png',
         ),
       ],
       faqs: [
@@ -379,7 +379,7 @@ class ServiceDetailScreen extends StatefulWidget {
       ],
     ),
     'concierge': const ServiceDetail(
-      title: 'Concierge & Errands',
+      title: 'Administrative & Concierge',
       category: 'HOME SUPPORT',
       tagline: 'Help with grocery, runs, and organization',
       description: 'Delegate your daily errands to a reliable assistant. We help with grocery shopping, picking up prescription refills, coordinating mail, home sorting, and escorting to appointments.',
@@ -387,7 +387,7 @@ class ServiceDetailScreen extends StatefulWidget {
       originalPrice: '₹399',
       rating: '4.6',
       ratingCount: '(3.4k ratings)',
-      imageUrl: 'https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=600',
+      detailImageAsset: 'assets/images/services/details/concierge.png',
       iconAsset: 'assets/images/services/concierge.png',
       whatsIncluded: [
         'Grocery shopping & prescription refills',
@@ -406,22 +406,22 @@ class ServiceDetailScreen extends StatefulWidget {
         ServiceStep(
           title: 'List Verification',
           description: 'Reviewing the shopping list, budgets, and keys',
-          icon: Icons.fact_check_outlined,
+          iconAsset: 'assets/images/services/steps/concierge/step_1.png',
         ),
         ServiceStep(
           title: 'Errand Run',
           description: 'Going to local markets or stores to fetch items',
-          icon: Icons.shopping_bag_outlined,
+          iconAsset: 'assets/images/services/steps/concierge/step_2.png',
         ),
         ServiceStep(
           title: 'Delivery & Sorting',
           description: 'Bringing items back and organizing them in the pantry',
-          icon: Icons.inventory_2_outlined,
+          iconAsset: 'assets/images/services/steps/concierge/step_3.png',
         ),
         ServiceStep(
           title: 'Billing Review',
           description: 'Presenting bills and checking matching receipts',
-          icon: Icons.receipt_long,
+          iconAsset: 'assets/images/services/steps/concierge/step_4.png',
         ),
       ],
       faqs: [
@@ -442,6 +442,10 @@ class ServiceDetailScreen extends StatefulWidget {
   };
 
   static ServiceDetail? resolveServiceDetail(String labelOrKey) {
+    if (servicesData.containsKey(labelOrKey)) {
+      return servicesData[labelOrKey];
+    }
+
     final key = labelOrKey
         .replaceAll('\n', '')
         .replaceAll(' ', '')
@@ -452,8 +456,12 @@ class ServiceDetailScreen extends StatefulWidget {
     if (key.contains('babysitting')) return servicesData['babysitting'];
     if (key.contains('mobility')) return servicesData['mobility'];
     if (key.contains('prepregnancy')) return servicesData['pre-pregnancy'];
-    if (key.contains('bathing')) return servicesData['bathing'];
-    if (key.contains('concierge')) return servicesData['concierge'];
+    if (key.contains('bathing') || key.contains('grooming')) {
+      return servicesData['bathing'];
+    }
+    if (key.contains('concierge') || key.contains('administrative')) {
+      return servicesData['concierge'];
+    }
     return null;
   }
 
@@ -492,10 +500,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           decoration: BoxDecoration(
-            color: HestiaColors.primary.withValues(alpha: 0.06),
+            color: Colors.white.withValues(alpha: 0.16),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: HestiaColors.primary.withValues(alpha: 0.3),
+              color: Colors.white.withValues(alpha: 0.9),
               width: 1.5,
             ),
           ),
@@ -504,7 +512,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: HestiaColors.primary,
+              color: Colors.white,
               letterSpacing: 0.5,
             ),
           ),
@@ -606,17 +614,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
 
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment(0.0, 0.4),
-            colors: [
-              Color.fromARGB(255, 94, 61, 29),
-              Color.fromARGB(255, 139, 106, 65),
-              Color.fromARGB(255, 252, 252, 252),
-            ],
-          ),
-        ),
+        color: HestiaColors.appBackground,
         child: Stack(
           children: [
             SingleChildScrollView(
@@ -627,40 +625,57 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             Stack(
               children: [
                 // Top Cover Image
-                Image.network(
-                  detail.imageUrl,
-                  width: double.infinity,
-                  height: 280,
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Container(
-                      height: 280,
-                      color: const Color(0xFFFAF5F0),
-                      child: const Center(
-                        child: CircularProgressIndicator(
-                          valueColor: AlwaysStoppedAnimation<Color>(HestiaColors.primary),
-                        ),
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: const BorderRadius.only(
+                      bottomLeft: Radius.circular(24),
+                      bottomRight: Radius.circular(24),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.15),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
                       ),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      bottomLeft: Radius.circular(24),
+                      bottomRight: Radius.circular(24),
+                    ),
+                    child: Image.asset(
+                      detail.detailImageAsset,
+                      width: double.infinity,
                       height: 280,
-                      color: const Color(0xFFFAF5F0),
-                      child: const Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.image_not_supported_outlined, size: 50, color: HestiaColors.primary),
-                          SizedBox(height: 8),
-                          Text(
-                            'Failed to load image',
-                            style: TextStyle(color: HestiaColors.textMedium, fontSize: 12),
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) {
+                        return Container(
+                          height: 280,
+                          color: const Color(0xFFFAF5F0),
+                          child: const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.image_not_supported_outlined,
+                                size: 50,
+                                color: HestiaColors.primary,
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'Add detail image PNG to assets/images/services/details/',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: HestiaColors.textMedium,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    );
-                  },
+                        );
+                      },
+                    ),
+                  ),
                 ),
                 // Floating Back Button
                 Positioned(
@@ -933,22 +948,21 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Premium styled icon container
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFAF5F0), // cream beige background
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: HestiaColors.primary.withValues(alpha: 0.1),
-                              width: 1,
-                            ),
-                          ),
-                          child: Icon(
-                            step.icon,
-                            color: HestiaColors.primary,
-                            size: 28,
+                        SizedBox(
+                          width: 60,
+                          height: 60,
+                          child: Image.asset(
+                            step.iconAsset,
+                            width: 60,
+                            height: 60,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) {
+                              return const Icon(
+                                Icons.image_not_supported_outlined,
+                                color: HestiaColors.primary,
+                                size: 42,
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 16),
