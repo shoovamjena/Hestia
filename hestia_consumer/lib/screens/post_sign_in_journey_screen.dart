@@ -350,7 +350,7 @@ class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
                       ),
                       const SizedBox(height: 6),
                       DropdownButtonFormField<String>(
-                        value: selectedRole,
+                        initialValue: selectedRole,
                         hint: const Text('Select service preferred'),
                         decoration: InputDecoration(
                           filled: true,

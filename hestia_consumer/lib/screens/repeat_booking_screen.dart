@@ -7,14 +7,14 @@ import 'time_slot_bottom_sheet.dart';
 class RepeatBookingScreen extends StatefulWidget {
   final String serviceTitle;
   final DateTime selectedDate;
-  final String selectedTime;
+  final String? selectedTime;
   final String selectedDuration;
 
   const RepeatBookingScreen({
     super.key,
     required this.serviceTitle,
     required this.selectedDate,
-    required this.selectedTime,
+    this.selectedTime,
     required this.selectedDuration,
   });
 
@@ -76,6 +76,10 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
     super.initState();
     _startDate = widget.selectedDate;
     _endDate = _startDate.add(const Duration(days: 29));
+    final initialTime = widget.selectedTime?.trim();
+    if (initialTime != null && initialTime.isNotEmpty) {
+      _selectedTimeSlot = initialTime;
+    }
   }
 
   String _formatMonthDay(DateTime date) {

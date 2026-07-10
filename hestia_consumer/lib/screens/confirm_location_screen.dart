@@ -683,6 +683,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
           await SupabaseService.createProfile(
             id: user.id,
             fullName: fullName,
+            email: email,
             phone: phone,
           );
         } else {

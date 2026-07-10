@@ -45,7 +45,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (user != null) {
       // Pre-populate with auth metadata
       _name = user.userMetadata?['full_name'] ?? 'User';
-      _email = user.email ?? '';
+      _email = SupabaseService.currentUserEmail;
       _phone = SupabaseService.currentUserPhone;
       _isPhoneVerified = SupabaseService.isPhoneVerified();
 
@@ -147,6 +147,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await SupabaseService.createProfile(
         id: user.id,
         fullName: _name,
+        email: _email,
         phone: _phone,
       );
 
@@ -573,7 +574,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       const SizedBox(height: 6),
                       DropdownButtonFormField<String>(
-                        value: selectedRole,
+                        initialValue: selectedRole,
                         hint: const Text('Select service preferred'),
                         decoration: InputDecoration(
                           filled: true,

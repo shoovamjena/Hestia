@@ -7,8 +7,6 @@ import 'service_detail_screen.dart';
 import 'repeat_booking_screen.dart';
 import 'schedule_screen.dart';
 import 'tracking_screen.dart';
-import '../services/notifications_state.dart';
-import 'notifications_screen.dart';
 import 'rate_session_screen.dart';
 import 'session_detail_screen.dart';
 import 'receipt_screen.dart';
@@ -22,7 +20,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin {
   bool _isLoading = true;
   String _userName = 'User';
   String _userInitials = 'U';
@@ -42,6 +41,151 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   String _sessionSearchQuery = '';
   List<Map<String, dynamic>> _upcomingBookings = [];
   int _bookingsSubTab = 0; // 0 for Upcoming, 1 for History
+
+  static const List<
+    ({
+      String label,
+      String price,
+      String originalPrice,
+      String rating,
+      String ratingCount,
+    })
+  >
+  _homeServiceCatalog = [
+    (
+      label: 'Post-Delivery',
+      price: '₹499',
+      originalPrice: '₹999',
+      rating: '4.9',
+      ratingCount: '38.6k',
+    ),
+    (
+      label: 'Babysitting',
+      price: '₹399',
+      originalPrice: '₹799',
+      rating: '4.9',
+      ratingCount: '31.5k',
+    ),
+    (
+      label: 'Mobility',
+      price: '₹449',
+      originalPrice: '₹899',
+      rating: '4.9',
+      ratingCount: '39.7k',
+    ),
+    (
+      label: 'Pre-Pregnancy',
+      price: '₹599',
+      originalPrice: '₹999',
+      rating: '4.9',
+      ratingCount: '13.4k',
+    ),
+    (
+      label: 'Bathing',
+      price: '₹349',
+      originalPrice: '₹699',
+      rating: '4.9',
+      ratingCount: '4.5k',
+    ),
+    (
+      label: 'Concierge',
+      price: '₹299',
+      originalPrice: '₹599',
+      rating: '4.9',
+      ratingCount: '3.3k',
+    ),
+  ];
+
+  Widget _buildServiceIconImage(
+    String label, {
+    double size = 50,
+    bool fullWidth = false,
+    double? height,
+    double imageHeightMultiplier = 2.5,
+  }) {
+    final assetPath = ServiceDetailScreen.iconAssetFor(label);
+
+    if (fullWidth) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final boxHeight =
+              constraints.maxHeight.isFinite ? constraints.maxHeight : (height ?? 96);
+          final boxWidth =
+              constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
+          final renderedImageHeight = boxHeight * imageHeightMultiplier;
+
+          return ClipRect(
+            child: Align(
+              alignment: Alignment.center,
+              child: Image.asset(
+                assetPath,
+                width: boxWidth,
+                height: renderedImageHeight,
+                fit: BoxFit.fitWidth,
+                alignment: Alignment.center,
+                errorBuilder: (context, error, stackTrace) {
+                  return SizedBox(
+                    height: renderedImageHeight,
+                    child: Align(
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.medical_services_outlined,
+                        size: boxHeight * 0.55,
+                        color: HestiaColors.primary,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    return Image.asset(
+      assetPath,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      errorBuilder: (context, error, stackTrace) {
+        return Icon(
+          Icons.medical_services_outlined,
+          size: size,
+          color: HestiaColors.primary,
+        );
+      },
+    );
+  }
+
+  Widget _buildServiceIconBadge(
+    String title, {
+    double size = 44,
+    double iconSize = 28,
+  }) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: const BoxDecoration(
+        color: Color(0xFFFAF2EB),
+        shape: BoxShape.circle,
+      ),
+      padding: EdgeInsets.all((size - iconSize) / 2),
+      child: Image.asset(
+        ServiceDetailScreen.iconAssetFor(title),
+        width: iconSize,
+        height: iconSize,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) {
+          return Icon(
+            Icons.medical_services_outlined,
+            color: HestiaColors.primary,
+            size: iconSize,
+          );
+        },
+      ),
+    );
+  }
 
   void _initAnimationController() {
     _navAnimationController ??= AnimationController(
@@ -71,22 +215,40 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       setState(() {
         _userName = metadataName;
         _userInitials = _getInitials(metadataName);
-        _email = user.email ?? '';
+        _email = SupabaseService.currentUserEmail;
         _phone = SupabaseService.currentUserPhone;
       });
 
-      try {
-        // 1. Fetch relational profile from database tables
-        var data = await SupabaseService.getUserProfile(user.id);
-        
-        // 2. Fallback to legacy Storage JSON if relational DB tables are empty
-        if (data == null || data['address'] == null) {
-          data = await SupabaseService.downloadProfileJson(user.id);
-        }
+      Map<String, dynamic>? profileData;
+      Map<String, dynamic>? activeBooking;
+      List<Map<String, dynamic>> recent = [];
+      List<Map<String, dynamic>> upcoming = [];
 
-        final profileData = data;
-        if (profileData != null) {
-          setState(() {
+      try {
+        final results = await Future.wait<dynamic>([
+          () async {
+            var data = await SupabaseService.getUserProfile(user.id);
+            if (data == null || data['address'] == null) {
+              data = await SupabaseService.downloadProfileJson(user.id);
+            }
+            return data;
+          }(),
+          SupabaseService.getActiveBooking(user.id),
+          SupabaseService.getRecentSessions(user.id),
+          SupabaseService.getUpcomingBookings(user.id),
+        ]);
+
+        profileData = results[0] as Map<String, dynamic>?;
+        activeBooking = results[1] as Map<String, dynamic>?;
+        recent = results[2] as List<Map<String, dynamic>>;
+        upcoming = results[3] as List<Map<String, dynamic>>;
+      } catch (e) {
+        debugPrint('Error loading home screen data: $e');
+      }
+
+      if (mounted) {
+        setState(() {
+          if (profileData != null) {
             _userName = profileData['name'] ?? _userName;
             _userInitials = _getInitials(_userName);
             _email = profileData['email'] ?? _email;
@@ -98,47 +260,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               final city = profileData['address']['city'] ?? '';
               _location = street.isNotEmpty ? '$street · $city' : city;
             }
-          });
-        }
-      } catch (e) {
-        debugPrint('Error loading profile details: $e');
-      }
-
-      // 3. Fetch active booking details dynamically from database
-      try {
-        final activeBooking = await SupabaseService.getActiveBooking(user.id);
-        if (activeBooking != null) {
-          setState(() {
-            _activeBooking = activeBooking;
-          });
-        }
-      } catch (e) {
-        debugPrint('Error loading active booking: $e');
-      }
-
-      // 4. Fetch recent sessions dynamically from database
-      try {
-        final recent = await SupabaseService.getRecentSessions(user.id);
-        setState(() {
+          }
+          _activeBooking = activeBooking;
           _recentSessions = recent;
-        });
-      } catch (e) {
-        debugPrint('Error loading recent sessions: $e');
-      }
-
-      // 5. Fetch upcoming bookings dynamically from database
-      try {
-        final upcoming = await SupabaseService.getUpcomingBookings(user.id);
-        setState(() {
           _upcomingBookings = upcoming;
+          _isLoading = false;
         });
-      } catch (e) {
-        debugPrint('Error loading upcoming bookings: $e');
       }
+      return;
     }
-    setState(() {
-      _isLoading = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   String _getInitials(String name) {
@@ -161,7 +296,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     } else if (bookingDay == tomorrow) {
       return 'Tomorrow';
     } else {
-      final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      final months = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
       return '${months[date.month - 1]} ${date.day}';
     }
   }
@@ -186,13 +334,36 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   _AvailableSlot _getRecentAvailableSlot() {
     final now = DateTime.now();
     final limitTime = now.add(const Duration(hours: 1));
-    
+
     final List<String> slots = [
-      '7:00 AM', '7:30 AM', '8:00 AM', '8:30 AM', '9:00 AM', '9:30 AM',
-      '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM', '12:00 PM', '12:30 PM',
-      '1:00 PM', '1:30 PM', '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM',
-      '4:00 PM', '4:30 PM', '5:00 PM', '5:30 PM', '6:00 PM', '6:30 PM',
-      '7:00 PM', '7:30 PM', '8:00 PM', '8:30 PM',
+      '7:00 AM',
+      '7:30 AM',
+      '8:00 AM',
+      '8:30 AM',
+      '9:00 AM',
+      '9:30 AM',
+      '10:00 AM',
+      '10:30 AM',
+      '11:00 AM',
+      '11:30 AM',
+      '12:00 PM',
+      '12:30 PM',
+      '1:00 PM',
+      '1:30 PM',
+      '2:00 PM',
+      '2:30 PM',
+      '3:00 PM',
+      '3:30 PM',
+      '4:00 PM',
+      '4:30 PM',
+      '5:00 PM',
+      '5:30 PM',
+      '6:00 PM',
+      '6:30 PM',
+      '7:00 PM',
+      '7:30 PM',
+      '8:00 PM',
+      '8:30 PM',
     ];
 
     DateTime? parseSlot(String slotStr) {
@@ -236,7 +407,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   Widget _serviceTile(
     String label,
-    IconData icon,
     String price,
     String originalPrice,
     String rating,
@@ -244,16 +414,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   ) {
     final minutes = _serviceMinutes[label] ?? 0;
     final isAdded = minutes > 0;
-    final double hourlyPrice = double.tryParse(price.replaceAll('₹', '').trim()) ?? 0.0;
-    final double origHourlyPrice = double.tryParse(originalPrice.replaceAll('₹', '').trim()) ?? 0.0;
-    final displayPrice = isAdded 
-        ? '₹${(hourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}' 
+    final double hourlyPrice =
+        double.tryParse(price.replaceAll('₹', '').trim()) ?? 0.0;
+    final double origHourlyPrice =
+        double.tryParse(originalPrice.replaceAll('₹', '').trim()) ?? 0.0;
+    final displayPrice = isAdded
+        ? '₹${(hourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}'
         : '₹${hourlyPrice.toStringAsFixed(0)}/hr';
-    final displayOriginalPrice = isAdded 
-        ? '₹${(origHourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}' 
+    final displayOriginalPrice = isAdded
+        ? '₹${(origHourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}'
         : '₹${origHourlyPrice.toStringAsFixed(0)}/hr';
     return SizedBox(
       width: 130,
+      height: double.infinity,
       child: GestureDetector(
         onTap: () {
           Navigator.of(context).push(
@@ -274,163 +447,171 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           );
         },
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: HestiaColors.primary.withValues(alpha: 0.25),
-              width: 1,
-            ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x0D000000),
-                blurRadius: 6,
-                offset: Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              // Image area with rating badge
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                height: 100,
-                child: Stack(
-                  children: [
-                    Container(
-                      height: 100,
-                      decoration: const BoxDecoration(
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(13),
-                          topRight: Radius.circular(13),
-                        ),
-                      ),
-                      child: Center(
-                        child: Icon(icon, size: 50, color: HestiaColors.primary),
-                      ),
-                    ),
-                    // Rating pill (top-left)
-                    Positioned(
-                      top: 5,
-                      left: 5,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: HestiaColors.primary,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.star, color: Colors.white, size: 9),
-                            const SizedBox(width: 2),
-                            Text(
-                              rating,
-                              style: const TextStyle(
-                                fontSize: 8,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(13),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.42),
+                    Colors.white.withValues(alpha: 0.18),
                   ],
                 ),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.55),
+                  width: 1.2,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-              // Name, price and ADD / stepper
-              Padding(
-                padding: const EdgeInsets.fromLTRB(7, 90, 7, 7),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: HestiaColors.textDark,
+              child: Stack(
+                clipBehavior: Clip.hardEdge,
+                children: [
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: _buildServiceIconImage(
+                        label,
+                        fullWidth: true,
+                        imageHeightMultiplier: 5.6,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Text(
-                          displayPrice,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: HestiaColors.textDark,
-                          ),
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          displayOriginalPrice,
-                          style: const TextStyle(
-                            fontSize: 9,
-                            color: HestiaColors.textLight,
-                            decoration: TextDecoration.lineThrough,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 5),
-                    // ADD button OR [-] Nmin [+] stepper
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: isAdded
-                          ? _buildStepper(label, minutes)
-                          : GestureDetector(
-                              key: const ValueKey('add_btn'),
-                              onTap: () {
-                                setState(() {
-                                  _serviceMinutes[label] = 30;
-                                });
-                              },
-                              child: Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(vertical: 4),
-                                decoration: BoxDecoration(
+                  ),
+                  Positioned.fill(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: HestiaColors.primary,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.star,
                                   color: Colors.white,
-                                  borderRadius: BorderRadius.circular(7),
-                                  border: Border.all(
-                                    color: HestiaColors.primary,
-                                    width: 1.2,
+                                  size: 9,
+                                ),
+                                const SizedBox(width: 2),
+                                Text(
+                                  rating,
+                                  style: const TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
                                   ),
                                 ),
-                                child: const Center(
-                                  child: Text(
-                                    'ADD',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: HestiaColors.primary,
-                                      letterSpacing: 0.3,
+                              ],
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            label,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: HestiaColors.textDark,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Text(
+                                displayPrice,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: HestiaColors.textDark,
+                                ),
+                              ),
+                              const SizedBox(width: 3),
+                              Flexible(
+                                child: Text(
+                                  displayOriginalPrice,
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    color: HestiaColors.textLight,
+                                    decoration: TextDecoration.lineThrough,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 5),
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 200),
+                            child: isAdded
+                                ? _buildStepper(label, minutes)
+                                : GestureDetector(
+                                    key: const ValueKey('add_btn'),
+                                    onTap: () {
+                                      setState(() {
+                                        _serviceMinutes[label] = 30;
+                                      });
+                                    },
+                                    child: Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.34,
+                                        ),
+                                        borderRadius: BorderRadius.circular(7),
+                                        border: Border.all(
+                                          color: Colors.white.withValues(
+                                            alpha: 0.65,
+                                          ),
+                                          width: 1.2,
+                                        ),
+                                      ),
+                                      child: const Center(
+                                        child: Text(
+                                          'ADD',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: HestiaColors.primary,
+                                            letterSpacing: 0.3,
+                                          ),
+                                        ),
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ),
-                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
-
 
   Widget _buildStepper(String label, int minutes) {
     return Container(
@@ -682,7 +863,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 12.0),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14.0,
+                  vertical: 12.0,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -698,7 +882,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                     const SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
                         color: HestiaColors.primary.withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(20),
@@ -716,11 +903,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ],
                 ),
               ),
-              Positioned(
-                bottom: 8,
-                right: 8,
-                child: illustration,
-              ),
+              Positioned(bottom: 8, right: 8, child: illustration),
             ],
           ),
         ),
@@ -771,11 +954,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     width: 1,
                   ),
                 ),
-                child: Icon(
-                  icon,
-                  color: HestiaColors.primary,
-                  size: 24,
-                ),
+                child: Icon(icon, color: HestiaColors.primary, size: 24),
               ),
               const SizedBox(height: 8),
               Text(
@@ -830,7 +1009,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           children: [
             // Segmented Control Toggle
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24.0,
+                vertical: 8.0,
+              ),
               child: Container(
                 height: 44,
                 decoration: BoxDecoration(
@@ -850,14 +1032,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         behavior: HitTestBehavior.opaque,
                         child: Container(
                           decoration: BoxDecoration(
-                            color: _bookingsSubTab == 0 ? Colors.white : Colors.transparent,
+                            color: _bookingsSubTab == 0
+                                ? Colors.white
+                                : Colors.transparent,
                             borderRadius: BorderRadius.circular(22),
                           ),
                           alignment: Alignment.center,
                           child: Text(
                             'Upcoming',
                             style: TextStyle(
-                              color: _bookingsSubTab == 0 ? HestiaColors.primary : Colors.white,
+                              color: _bookingsSubTab == 0
+                                  ? HestiaColors.primary
+                                  : Colors.white,
                               fontWeight: FontWeight.bold,
                               fontSize: 14,
                             ),
@@ -875,14 +1061,18 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         behavior: HitTestBehavior.opaque,
                         child: Container(
                           decoration: BoxDecoration(
-                            color: _bookingsSubTab == 1 ? Colors.white : Colors.transparent,
+                            color: _bookingsSubTab == 1
+                                ? Colors.white
+                                : Colors.transparent,
                             borderRadius: BorderRadius.circular(22),
                           ),
                           alignment: Alignment.center,
                           child: Text(
                             'History',
                             style: TextStyle(
-                              color: _bookingsSubTab == 1 ? HestiaColors.primary : Colors.white,
+                              color: _bookingsSubTab == 1
+                                  ? HestiaColors.primary
+                                  : Colors.white,
                               fontWeight: FontWeight.bold,
                               fontSize: 14,
                             ),
@@ -938,10 +1128,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             const SizedBox(height: 6),
             const Text(
               'Book a care visit from the Home screen.',
-              style: TextStyle(
-                fontSize: 13,
-                color: HestiaColors.textMedium,
-              ),
+              style: TextStyle(fontSize: 13, color: HestiaColors.textMedium),
             ),
           ],
         ),
@@ -953,7 +1140,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       color: HestiaColors.primary,
       child: ListView.separated(
         physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 120), // padded to avoid floating navbar
+        padding: const EdgeInsets.fromLTRB(
+          24,
+          8,
+          24,
+          120,
+        ), // padded to avoid floating navbar
         itemCount: _upcomingBookings.length,
         separatorBuilder: (context, index) => const SizedBox(height: 14),
         itemBuilder: (context, index) {
@@ -970,39 +1162,31 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
     final status = booking['status'] as String? ?? 'pending';
     final start = booking['scheduled_start'] as DateTime;
-    final totalAmount = booking['amount'] != null ? (booking['amount'] as num).toInt() : 0;
-    
+    final totalAmount = booking['amount'] != null
+        ? (booking['amount'] as num).toInt()
+        : 0;
+
     // Check if date is today/tomorrow
     final now = DateTime.now();
-    final isToday = start.year == now.year && start.month == now.month && start.day == now.day;
+    final isToday =
+        start.year == now.year &&
+        start.month == now.month &&
+        start.day == now.day;
     final tomorrow = now.add(const Duration(days: 1));
-    final isTomorrow = start.year == tomorrow.year && start.month == tomorrow.month && start.day == tomorrow.day;
-    
+    final isTomorrow =
+        start.year == tomorrow.year &&
+        start.month == tomorrow.month &&
+        start.day == tomorrow.day;
+
     final String dateStr = isToday
         ? 'Today'
         : isTomorrow
-            ? 'Tomorrow'
-            : _formatBookingDate(start);
+        ? 'Tomorrow'
+        : _formatBookingDate(start);
     final String timeStr = _formatBookingTime(start);
 
-    // Icon & Color based on Service Pillar
-    IconData cardIcon;
-    Color iconColor;
-    Color iconBgColor;
-
-    if (title.toLowerCase().contains('delivery') || title.toLowerCase().contains('hospital')) {
-      cardIcon = Icons.favorite_rounded;
-      iconColor = const Color(0xFFC39365);
-      iconBgColor = const Color(0xFFFAF2EB);
-    } else if (title.toLowerCase().contains('mobility')) {
-      cardIcon = Icons.accessibility_new_rounded;
-      iconColor = const Color(0xFF1E88E5);
-      iconBgColor = const Color(0xFFE3F2FD);
-    } else {
-      cardIcon = Icons.child_care_rounded;
-      iconColor = const Color(0xFF2E7D32);
-      iconBgColor = const Color(0xFFE8F5E9);
-    }
+    // Service icon from PNG asset
+    final String iconTitle = title;
 
     // Status styling
     Color statusBgColor;
@@ -1025,11 +1209,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     return GestureDetector(
       onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => TrackingScreen(bookingData: booking),
-          ),
-        ).then((_) => _loadProfileData());
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                builder: (context) => TrackingScreen(bookingData: booking),
+              ),
+            )
+            .then((_) => _loadProfileData());
       },
       child: Container(
         padding: const EdgeInsets.all(18),
@@ -1054,15 +1240,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Icon
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: iconBgColor,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(cardIcon, color: iconColor, size: 20),
-                ),
+                _buildServiceIconBadge(iconTitle),
                 const SizedBox(width: 14),
                 // Text details
                 Expanded(
@@ -1084,7 +1262,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             ),
                           ),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
                             decoration: BoxDecoration(
                               color: statusBgColor,
                               borderRadius: BorderRadius.circular(8),
@@ -1166,10 +1347,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final filteredSessions = _recentSessions.where((session) {
       final title = session['title'] as String? ?? '';
       final caregiver = session['caregiver_name'] as String? ?? '';
-      final matchesQuery = title.toLowerCase().contains(_sessionSearchQuery) ||
+      final matchesQuery =
+          title.toLowerCase().contains(_sessionSearchQuery) ||
           caregiver.toLowerCase().contains(_sessionSearchQuery);
-      final matchesCat = _selectedSessionCategory == 'All' ||
-          title.toLowerCase().contains(_selectedSessionCategory.toLowerCase().replaceAll('-care', '').replaceAll(' care', ''));
+      final matchesCat =
+          _selectedSessionCategory == 'All' ||
+          title.toLowerCase().contains(
+            _selectedSessionCategory
+                .toLowerCase()
+                .replaceAll('-care', '')
+                .replaceAll(' care', ''),
+          );
       return matchesQuery && matchesCat;
     }).toList();
 
@@ -1221,7 +1409,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 24.0),
-            children: ['All', 'Post-Delivery', 'Mobility', 'Babysitting'].map((cat) {
+            children: ['All', 'Post-Delivery', 'Mobility', 'Babysitting'].map((
+              cat,
+            ) {
               final isSelected = _selectedSessionCategory == cat;
               return GestureDetector(
                 onTap: () {
@@ -1231,12 +1421,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 },
                 child: Container(
                   margin: const EdgeInsets.only(right: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
-                    color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.15),
+                    color: isSelected
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(
-                      color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.2),
+                      color: isSelected
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.2),
                       width: 1.2,
                     ),
                   ),
@@ -1266,9 +1463,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             child: filteredSessions.isNotEmpty
                 ? ListView.separated(
                     physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 120.0), // spacer for floating nav
+                    padding: const EdgeInsets.fromLTRB(
+                      24.0,
+                      0.0,
+                      24.0,
+                      120.0,
+                    ), // spacer for floating nav
                     itemCount: filteredSessions.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 14),
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 14),
                     itemBuilder: (context, index) {
                       final session = filteredSessions[index];
                       return _buildSessionCard(session);
@@ -1311,10 +1514,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           const SizedBox(height: 6),
           const Text(
             'Try adjusting your filters or search query.',
-            style: TextStyle(
-              fontSize: 13,
-              color: HestiaColors.textMedium,
-            ),
+            style: TextStyle(fontSize: 13, color: HestiaColors.textMedium),
           ),
         ],
       ),
@@ -1325,9 +1525,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final caregiverName = session['caregiver_name'] ?? 'Sunita Rao';
     final title = session['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
-    
+
     // Parse duration formatting
-    final double durationHrs = (session['duration_hours'] as num?)?.toDouble() ?? 3.0;
+    final double durationHrs =
+        (session['duration_hours'] as num?)?.toDouble() ?? 3.0;
     String durationStr = '${durationHrs.toInt()} hrs';
     if (durationHrs == 3.033) {
       durationStr = '3 hrs 2 min';
@@ -1337,46 +1538,35 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
 
     final start = session['scheduled_start'] as DateTime;
-    
+
     // Check if date is today
     final now = DateTime.now();
-    final isToday = start.year == now.year && start.month == now.month && start.day == now.day;
+    final isToday =
+        start.year == now.year &&
+        start.month == now.month &&
+        start.day == now.day;
     final String datePrefix = isToday ? 'Today' : _formatBookingDate(start);
-    
+
     final subtitle = '$datePrefix • $caregiverName';
 
     final bool isRated = session['isRated'] ?? false;
     final int ratingValue = session['rating'] ?? 5;
 
-    // Logo icon picker
-    IconData cardIcon;
-    Color iconColor;
-    Color iconBgColor;
-
-    if (title.toLowerCase().contains('delivery') || title.toLowerCase().contains('hospital')) {
-      cardIcon = Icons.favorite_rounded;
-      iconColor = const Color(0xFFC39365);
-      iconBgColor = const Color(0xFFFAF2EB);
-    } else if (title.toLowerCase().contains('mobility')) {
-      cardIcon = Icons.accessibility_new_rounded;
-      iconColor = const Color(0xFF1E88E5);
-      iconBgColor = const Color(0xFFE3F2FD);
-    } else {
-      cardIcon = Icons.child_care_rounded;
-      iconColor = const Color(0xFF2E7D32);
-      iconBgColor = const Color(0xFFE8F5E9);
-    }
+    // Logo icon from PNG asset
+    final String iconTitle = title;
 
     return GestureDetector(
       onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => SessionDetailScreen(sessionData: session),
-          ),
-        ).then((_) {
-          // reload when coming back to capture new ratings
-          setState(() {});
-        });
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute(
+                builder: (context) => SessionDetailScreen(sessionData: session),
+              ),
+            )
+            .then((_) {
+              // reload when coming back to capture new ratings
+              setState(() {});
+            });
       },
       child: Container(
         padding: const EdgeInsets.all(18),
@@ -1401,15 +1591,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Category circular logo
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: iconBgColor,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(cardIcon, color: iconColor, size: 20),
-                ),
+                _buildServiceIconBadge(iconTitle),
                 const SizedBox(width: 14),
                 // Titles and rating row
                 Expanded(
@@ -1433,7 +1615,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               children: List.generate(5, (idx) {
                                 return Icon(
                                   Icons.star_rounded,
-                                  color: idx < ratingValue ? const Color(0xFFDCA857) : const Color(0xFFE2E2E2),
+                                  color: idx < ratingValue
+                                      ? const Color(0xFFDCA857)
+                                      : const Color(0xFFE2E2E2),
                                   size: 13,
                                 );
                               }),
@@ -1453,7 +1637,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ],
             ),
-            
+
             const SizedBox(height: 16),
             const Divider(color: Color(0xFFF5EBE0), height: 1, thickness: 1.2),
             const SizedBox(height: 16),
@@ -1462,17 +1646,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE8F5ED),
+                    color: session['status'] == 'no_show'
+                        ? const Color(0xFFFDE8E8)
+                        : const Color(0xFFE8F5ED),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Text(
-                    'Completed',
+                  child: Text(
+                    session['status'] == 'no_show' ? 'No-Show' : 'Completed',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF2E6B4A),
+                      color: session['status'] == 'no_show'
+                          ? const Color(0xFFB94A4A)
+                          : const Color(0xFF2E6B4A),
                     ),
                   ),
                 ),
@@ -1492,19 +1683,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) => RepeatBookingScreen(
-                          serviceTitle: title == 'Post-Delivery' ? 'Post-Delivery Care' : 
-                                        title == 'Mobility' ? 'Mobility Support' :
-                                        title == 'Babysitting' ? 'Certified Babysitting' :
-                                        'Admin Concierge',
+                          serviceTitle: title == 'Post-Delivery'
+                              ? 'Post-Delivery Care'
+                              : title == 'Mobility'
+                              ? 'Mobility Support'
+                              : title == 'Babysitting'
+                              ? 'Certified Babysitting'
+                              : 'Admin Concierge',
                           selectedDate: DateTime.now(),
-                          selectedTime: '9:00 AM',
                           selectedDuration: '3 hrs',
                         ),
                       ),
                     );
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(14),
@@ -1525,7 +1721,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ],
             ),
-            
+
             // Unrated / view receipt links
             Padding(
               padding: const EdgeInsets.only(top: 14.0),
@@ -1534,13 +1730,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   if (!isRated) ...[
                     GestureDetector(
                       onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => RateSessionScreen(sessionData: session),
-                          ),
-                        ).then((_) {
-                          setState(() {});
-                        });
+                        Navigator.of(context)
+                            .push(
+                              MaterialPageRoute(
+                                builder: (context) =>
+                                    RateSessionScreen(sessionData: session),
+                              ),
+                            )
+                            .then((_) {
+                              setState(() {});
+                            });
                       },
                       child: const Text(
                         'Rate this session',
@@ -1558,7 +1757,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     onTap: () {
                       Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (context) => ReceiptScreen(sessionData: session),
+                          builder: (context) =>
+                              ReceiptScreen(sessionData: session),
                         ),
                       );
                     },
@@ -1755,24 +1955,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             begin: Alignment.topCenter,
             end: Alignment(0.0, 0.4),
             colors: [
-              Color.fromARGB(
-                255,
-                94,
-                61,
-                29,
-              ), // Light warm tan/mocha
-              Color.fromARGB(
-                255,
-                139,
-                106,
-                65,
-              ), // Soft warm apricot/cream
-              Color.fromARGB(
-                255,
-                252,
-                252,
-                252,
-              ), // Light pale cream/yellow
+              Color.fromARGB(255, 94, 61, 29), // Light warm tan/mocha
+              Color.fromARGB(255, 139, 106, 65), // Soft warm apricot/cream
+              Color.fromARGB(255, 252, 252, 252), // Light pale cream/yellow
             ],
           ),
         ),
@@ -1791,8 +1976,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   children: [
                     Expanded(
                       child: Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
                             'HESTIA',
@@ -1826,16 +2010,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           const SizedBox(height: 6),
                           GestureDetector(
                             onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => const SearchLocationScreen(),
-                                ),
-                              ).then((_) => _loadProfileData());
+                              Navigator.of(context)
+                                  .push(
+                                    MaterialPageRoute(
+                                      builder: (context) =>
+                                          const SearchLocationScreen(),
+                                    ),
+                                  )
+                                  .then((_) => _loadProfileData());
                             },
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.location_on, color: Colors.white70, size: 14),
+                                const Icon(
+                                  Icons.location_on,
+                                  color: Colors.white70,
+                                  size: 14,
+                                ),
                                 const SizedBox(width: 4),
                                 Flexible(
                                   child: Text(
@@ -1860,58 +2051,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       children: [
                         GestureDetector(
                           onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => const NotificationsScreen(),
-                              ),
-                            );
-                          },
-                          child: AnimatedBuilder(
-                            animation: NotificationsState.instance,
-                            builder: (context, child) {
-                              final count = NotificationsState.instance.unreadCount;
-                              return Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.15),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(
-                                      Icons.notifications_none_rounded,
-                                      color: Colors.white,
-                                      size: 22,
-                                    ),
+                            Navigator.of(context)
+                                .push(
+                                  MaterialPageRoute(
+                                    builder: (context) => const ProfileScreen(),
                                   ),
-                                  if (count > 0)
-                                    Positioned(
-                                      top: -1,
-                                      right: -1,
-                                      child: Container(
-                                        width: 10,
-                                        height: 10,
-                                        decoration: const BoxDecoration(
-                                          color: Color(0xFFC0392B), // Premium red dot badge
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        GestureDetector(
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => const ProfileScreen(),
-                              ),
-                            ).then((_) => _loadProfileData());
+                                )
+                                .then((_) => _loadProfileData());
                           },
                           child: Container(
                             width: 60,
@@ -1942,9 +2088,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         onTap: () {
                           Navigator.of(context).push(
                             MaterialPageRoute(
-                              builder: (context) => TrackingScreen(
-                                bookingData: _activeBooking!,
-                              ),
+                              builder: (context) =>
+                                  TrackingScreen(bookingData: _activeBooking!),
                             ),
                           );
                         },
@@ -1981,8 +2126,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     const Text(
                                       'ACTIVE BOOKING',
@@ -2045,7 +2189,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               width: 48,
                               height: 48,
                               decoration: BoxDecoration(
-                                color: HestiaColors.primary.withValues(alpha: 0.1),
+                                color: HestiaColors.primary.withValues(
+                                  alpha: 0.1,
+                                ),
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(
@@ -2094,8 +2240,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 const SizedBox(height: 18),
 
                 // Household Care Profile (if data loaded)
-                if (_primaryReason.isNotEmpty ||
-                    _members.isNotEmpty) ...[
+                if (_primaryReason.isNotEmpty || _members.isNotEmpty) ...[
                   _buildCareProfileSection(),
                   const SizedBox(height: 18),
                 ],
@@ -2135,9 +2280,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           ),
                         ),
                         child: Text(
-                          _showAllServices
-                              ? 'Show less'
-                              : 'See all',
+                          _showAllServices ? 'Show less' : 'See all',
                           style: TextStyle(
                             color: _showAllServices
                                 ? HestiaColors.primary
@@ -2157,22 +2300,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   duration: const Duration(milliseconds: 300),
                   switchInCurve: Curves.easeOut,
                   switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (child, animation) =>
-                      FadeTransition(
-                        opacity: animation,
-                        child: SizeTransition(
-                          sizeFactor: animation,
-                          alignment: Alignment.topCenter,
-                          child: child,
-                        ),
-                      ),
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SizeTransition(
+                      sizeFactor: animation,
+                      alignment: Alignment.topCenter,
+                      child: child,
+                    ),
+                  ),
                   child: _showAllServices
                       ? KeyedSubtree(
                           key: const ValueKey('grid'),
                           child: LayoutBuilder(
                             builder: (context, constraints) {
                               final double totalWidth = constraints.maxWidth;
-                              final double columnWidth = (totalWidth - 20.0) / 3;
+                              final double columnWidth =
+                                  (totalWidth - 20.0) / 3;
                               final double desiredHeight = 185.0;
                               final double aspect = columnWidth / desiredHeight;
 
@@ -2183,56 +2326,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 crossAxisSpacing: 10,
                                 mainAxisSpacing: 10,
                                 childAspectRatio: aspect,
-                                children: [
-                                  _serviceTile(
-                                    'Post-Delivery',
-                                    Icons.local_hospital,
-                                    '₹499',
-                                    '₹999',
-                                    '4.9',
-                                    '38.6k',
-                                  ),
-                                  _serviceTile(
-                                    'Babysitting',
-                                    Icons.child_care,
-                                    '₹399',
-                                    '₹799',
-                                    '4.9',
-                                    '31.5k',
-                                  ),
-                                  _serviceTile(
-                                    'Mobility',
-                                    Icons.accessibility_new,
-                                    '₹449',
-                                    '₹899',
-                                    '4.9',
-                                    '39.7k',
-                                  ),
-                                  _serviceTile(
-                                    'Pre-Pregnancy',
-                                    Icons.favorite_border,
-                                    '₹599',
-                                    '₹999',
-                                    '4.9',
-                                    '13.4k',
-                                  ),
-                                  _serviceTile(
-                                    'Bathing',
-                                    Icons.bathtub,
-                                    '₹349',
-                                    '₹699',
-                                    '4.9',
-                                    '4.5k',
-                                  ),
-                                  _serviceTile(
-                                    'Concierge',
-                                    Icons.room_service,
-                                    '₹299',
-                                    '₹599',
-                                    '4.9',
-                                    '3.3k',
-                                  ),
-                                ],
+                                children: _homeServiceCatalog
+                                    .map(
+                                      (service) => _serviceTile(
+                                        service.label,
+                                        service.price,
+                                        service.originalPrice,
+                                        service.rating,
+                                        service.ratingCount,
+                                      ),
+                                    )
+                                    .toList(),
                               );
                             },
                           ),
@@ -2243,62 +2347,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             height: 185,
                             child: ListView(
                               scrollDirection: Axis.horizontal,
-                              physics:
-                                  const BouncingScrollPhysics(),
+                              physics: const BouncingScrollPhysics(),
                               children: [
-                                _serviceTile(
-                                  'Post-Delivery',
-                                  Icons.local_hospital,
-                                  '₹499',
-                                  '₹999',
-                                  '4.9',
-                                  '38.6k',
-                                ),
-                                const SizedBox(width: 10),
-                                _serviceTile(
-                                  'Babysitting',
-                                  Icons.child_care,
-                                  '₹399',
-                                  '₹799',
-                                  '4.9',
-                                  '31.5k',
-                                ),
-                                const SizedBox(width: 10),
-                                _serviceTile(
-                                  'Mobility',
-                                  Icons.accessibility_new,
-                                  '₹449',
-                                  '₹899',
-                                  '4.9',
-                                  '39.7k',
-                                ),
-                                const SizedBox(width: 10),
-                                _serviceTile(
-                                  'Pre-Pregnancy',
-                                  Icons.favorite_border,
-                                  '₹599',
-                                  '₹999',
-                                  '4.9',
-                                  '13.4k',
-                                ),
-                                const SizedBox(width: 10),
-                                _serviceTile(
-                                  'Bathing',
-                                  Icons.bathtub,
-                                  '₹349',
-                                  '₹699',
-                                  '4.9',
-                                  '4.5k',
-                                ),
-                                const SizedBox(width: 10),
-                                _serviceTile(
-                                  'Concierge',
-                                  Icons.room_service,
-                                  '₹299',
-                                  '₹599',
-                                  '4.9',
-                                  '3.3k',
-                                ),
+                                for (
+                                  int i = 0;
+                                  i < _homeServiceCatalog.length;
+                                  i++
+                                ) ...[
+                                  if (i > 0) const SizedBox(width: 10),
+                                  _serviceTile(
+                                    _homeServiceCatalog[i].label,
+                                    _homeServiceCatalog[i].price,
+                                    _homeServiceCatalog[i].originalPrice,
+                                    _homeServiceCatalog[i].rating,
+                                    _homeServiceCatalog[i].ratingCount,
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -2368,7 +2432,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           ),
                         ],
                       );
-                    }
+                    },
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -2422,7 +2486,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             builder: (context) => RepeatBookingScreen(
                               serviceTitle: 'Post-Delivery Care',
                               selectedDate: DateTime.now(),
-                              selectedTime: '9:00 AM',
                               selectedDuration: '3 hrs',
                             ),
                           ),
@@ -2467,7 +2530,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ),
                     const SizedBox(width: 10),
                     _trustCard(
-                      title: 'Safe, reliable,\nand consistent\nevery single time',
+                      title:
+                          'Safe, reliable,\nand consistent\nevery single time',
                       icon: Icons.health_and_safety_rounded,
                       gradientColors: [Colors.white, const Color(0xFFFFF9F5)],
                     ),
@@ -2521,6 +2585,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       ),
     );
   }
+
   @override
   Widget build(BuildContext context) {
     _initAnimationController();
@@ -2602,7 +2667,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             MaterialPageRoute(
                               builder: (context) => ScheduleScreen(
                                 serviceTitle: _serviceMinutes.keys.first,
-                                initialServicesMap: Map<String, int>.from(_serviceMinutes),
+                                initialServicesMap: Map<String, int>.from(
+                                  _serviceMinutes,
+                                ),
                                 onServicesChanged: (updatedMap) {
                                   setState(() {
                                     _serviceMinutes.clear();
@@ -2655,16 +2722,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         top: false,
         child: Container(
           margin: const EdgeInsets.fromLTRB(24, 0, 24, 0),
-          
+
           child: ClipRRect(
             borderRadius: BorderRadius.circular(50),
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 4,
-                  horizontal: 0,
-                ),
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 0),
                 decoration: BoxDecoration(
                   color: HestiaColors.primary.withValues(alpha: 0.3),
                 ),
@@ -2681,30 +2745,47 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           final double t = controller.value;
                           final double pillNormalWidth = tabWidth - 8;
 
-                          final double centerSource = (_oldTabIndex + 0.5) * tabWidth;
-                          final double centerTarget = (_currentTabIndex + 0.5) * tabWidth;
+                          final double centerSource =
+                              (_oldTabIndex + 0.5) * tabWidth;
+                          final double centerTarget =
+                              (_currentTabIndex + 0.5) * tabWidth;
 
                           double tLeft;
                           double tRight;
 
                           if (_currentTabIndex > _oldTabIndex) {
-                            tRight = CurveTween(curve: Curves.easeOutQuart).transform(t);
-                            tLeft = CurveTween(curve: Curves.easeInQuad).transform(t);
+                            tRight = CurveTween(
+                              curve: Curves.easeOutQuart,
+                            ).transform(t);
+                            tLeft = CurveTween(
+                              curve: Curves.easeInQuad,
+                            ).transform(t);
                           } else if (_currentTabIndex < _oldTabIndex) {
-                            tLeft = CurveTween(curve: Curves.easeOutQuart).transform(t);
-                            tRight = CurveTween(curve: Curves.easeInQuad).transform(t);
+                            tLeft = CurveTween(
+                              curve: Curves.easeOutQuart,
+                            ).transform(t);
+                            tRight = CurveTween(
+                              curve: Curves.easeInQuad,
+                            ).transform(t);
                           } else {
                             tLeft = t;
                             tRight = t;
                           }
 
-                          final double leftSource = centerSource - pillNormalWidth / 2;
-                          final double leftTarget = centerTarget - pillNormalWidth / 2;
-                          final double rightSource = centerSource + pillNormalWidth / 2;
-                          final double rightTarget = centerTarget + pillNormalWidth / 2;
+                          final double leftSource =
+                              centerSource - pillNormalWidth / 2;
+                          final double leftTarget =
+                              centerTarget - pillNormalWidth / 2;
+                          final double rightSource =
+                              centerSource + pillNormalWidth / 2;
+                          final double rightTarget =
+                              centerTarget + pillNormalWidth / 2;
 
-                          double currentLeft = leftSource + (leftTarget - leftSource) * tLeft;
-                          double currentRight = rightSource + (rightTarget - rightSource) * tRight;
+                          double currentLeft =
+                              leftSource + (leftTarget - leftSource) * tLeft;
+                          double currentRight =
+                              rightSource +
+                              (rightTarget - rightSource) * tRight;
 
                           // Clamping to avoid overflow on extremely small screens
                           if (currentLeft < 0.0) {
@@ -2713,18 +2794,36 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           if (currentRight > totalWidth) {
                             currentRight = totalWidth;
                           }
-                          final double currentWidth = (currentRight - currentLeft).clamp(pillNormalWidth, totalWidth);
+                          final double currentWidth =
+                              (currentRight - currentLeft).clamp(
+                                pillNormalWidth,
+                                totalWidth,
+                              );
 
                           Color getNavItemColor(int index) {
                             final Color activeColor = HestiaColors.primary;
-                            final Color inactiveColor = Colors.brown.withValues(alpha: 0.5);
+                            final Color inactiveColor = Colors.brown.withValues(
+                              alpha: 0.5,
+                            );
                             if (_oldTabIndex == _currentTabIndex) {
-                              return index == _currentTabIndex ? activeColor : inactiveColor;
+                              return index == _currentTabIndex
+                                  ? activeColor
+                                  : inactiveColor;
                             }
                             if (index == _currentTabIndex) {
-                              return Color.lerp(inactiveColor, activeColor, t) ?? activeColor;
+                              return Color.lerp(
+                                    inactiveColor,
+                                    activeColor,
+                                    t,
+                                  ) ??
+                                  activeColor;
                             } else if (index == _oldTabIndex) {
-                              return Color.lerp(activeColor, inactiveColor, t) ?? inactiveColor;
+                              return Color.lerp(
+                                    activeColor,
+                                    inactiveColor,
+                                    t,
+                                  ) ??
+                                  inactiveColor;
                             } else {
                               return inactiveColor;
                             }
@@ -2744,8 +2843,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           }
 
                           IconData getIconData(int index) {
-                            final bool isSelectedAtRest = _oldTabIndex == _currentTabIndex && index == _currentTabIndex;
-                            
+                            final bool isSelectedAtRest =
+                                _oldTabIndex == _currentTabIndex &&
+                                index == _currentTabIndex;
+
                             bool isEngulfed = false;
                             if (isSelectedAtRest) {
                               isEngulfed = true;
@@ -2757,11 +2858,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
                             switch (index) {
                               case 0:
-                                return isEngulfed ? Icons.home : Icons.home_outlined;
+                                return isEngulfed
+                                    ? Icons.home
+                                    : Icons.home_outlined;
                               case 1:
-                                return isEngulfed ? Icons.calendar_month : Icons.calendar_month_outlined;
+                                return isEngulfed
+                                    ? Icons.calendar_month
+                                    : Icons.calendar_month_outlined;
                               case 2:
-                                return isEngulfed ? Icons.person : Icons.person_outline;
+                                return isEngulfed
+                                    ? Icons.person
+                                    : Icons.person_outline;
                               default:
                                 return Icons.home_outlined;
                             }
@@ -2825,10 +2932,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     width: currentWidth,
                                     height: 66.0,
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.25),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.25,
+                                      ),
                                       borderRadius: BorderRadius.circular(50),
                                       border: Border.all(
-                                        color: Colors.white.withValues(alpha: 1),
+                                        color: Colors.white.withValues(
+                                          alpha: 1,
+                                        ),
                                         width: 1.5,
                                       ),
                                     ),
@@ -2837,7 +2948,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               ),
                               // Row of items
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceAround,
                                 crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
                                   buildNavItemInternal(0),
@@ -2876,7 +2988,7 @@ class CardGridPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     final double step = 15.0;
-    
+
     // Draw diagonal lines from bottom-left to top-right
     for (double offset = -size.height; offset < size.width; offset += step) {
       canvas.drawLine(
@@ -2919,7 +3031,7 @@ class ClockPainter extends CustomPainter {
 
     final double startAngle = -pi * 0.25;
     final double sweepAngle = pi * 1.6;
-    
+
     canvas.drawArc(
       Rect.fromCircle(center: center, radius: radius - 3),
       startAngle,
@@ -2952,7 +3064,7 @@ class ClockPainter extends CustomPainter {
     final Paint fillPaint = Paint()
       ..color = primaryColor
       ..style = PaintingStyle.fill;
-    
+
     canvas.drawPath(arrowPath, fillPaint);
 
     final Paint innerCirclePaint = Paint()
@@ -2976,13 +3088,19 @@ class ClockPainter extends CustomPainter {
 
     canvas.drawLine(
       center,
-      Offset(center.dx + (radius - 18) * cos(0.2), center.dy + (radius - 18) * sin(0.2)),
+      Offset(
+        center.dx + (radius - 18) * cos(0.2),
+        center.dy + (radius - 18) * sin(0.2),
+      ),
       handPaint,
     );
 
     canvas.drawLine(
       center,
-      Offset(center.dx + (radius - 14) * cos(-pi / 2), center.dy + (radius - 14) * sin(-pi / 2)),
+      Offset(
+        center.dx + (radius - 14) * cos(-pi / 2),
+        center.dy + (radius - 14) * sin(-pi / 2),
+      ),
       handPaint,
     );
   }
@@ -3002,16 +3120,14 @@ class ClockIllustration extends StatelessWidget {
     return SizedBox(
       width: 50,
       height: 50,
-      child: CustomPaint(
-        painter: ClockPainter(primaryColor: primaryColor),
-      ),
+      child: CustomPaint(painter: ClockPainter(primaryColor: primaryColor)),
     );
   }
 }
 
 class CalendarIllustration extends StatelessWidget {
   final Color primaryColor;
-  
+
   const CalendarIllustration({super.key, required this.primaryColor});
 
   @override
@@ -3043,13 +3159,13 @@ class CalendarIllustration extends StatelessWidget {
                 borderRadius: BorderRadius.circular(6),
                 child: Column(
                   children: [
-                    Container(
-                      height: 8,
-                      color: primaryColor,
-                    ),
+                    Container(height: 8, color: primaryColor),
                     Expanded(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 4,
+                        ),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: List.generate(3, (row) {

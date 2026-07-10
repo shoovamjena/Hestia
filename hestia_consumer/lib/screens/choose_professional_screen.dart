@@ -57,6 +57,7 @@ class ChooseProfessionalScreen extends StatefulWidget {
 class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
   bool _isSearching = true;
   bool _fetchError = false;
+  bool _noProfessionalsFound = false;
   Timer? _searchTimer;
   ProfessionalProfile? _matchedProfessional;
   List<ProfessionalProfile> _professionals = [];
@@ -151,8 +152,9 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
           if (fetched.isNotEmpty) {
             _professionals = fetched;
             _matchedProfessional = fetched.first;
+            _noProfessionalsFound = false;
           } else {
-            _fetchError = true;
+            _noProfessionalsFound = true;
           }
         });
       }
@@ -163,6 +165,7 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
         setState(() {
           _isSearching = false;
           _fetchError = true;
+          _noProfessionalsFound = false;
         });
       }
     }
@@ -259,9 +262,11 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                         child: Text(
                            _isSearching
                                ? 'Finding professional...'
-                               : _fetchError
+                               : _noProfessionalsFound
                                    ? 'No professionals found'
-                                   : 'Professional found',
+                                   : _fetchError
+                                       ? 'Search Error'
+                                       : 'Professional found',
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.bold,
@@ -281,8 +286,8 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
               Expanded(
                 child: _isSearching
                     ? _buildSearchingLayout()
-                    : _fetchError
-                        ? _buildErrorLayout()
+                    : (_fetchError || _noProfessionalsFound)
+                        ? _buildErrorLayout(isNetworkError: _fetchError)
                         : _buildFoundLayout(),
               ),
 
@@ -444,7 +449,14 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
     );
   }
 
-  Widget _buildErrorLayout() {
+  Widget _buildErrorLayout({required bool isNetworkError}) {
+    final badgeText = isNetworkError ? 'SEARCH ERROR' : 'NO PROFESSIONALS FOUND';
+    final titleText = isNetworkError ? 'Search Failed' : 'No professionals found';
+    final descText = isNetworkError
+        ? 'A system or network error occurred while searching for professionals. Please check your internet connection and try again.'
+        : 'We couldn\'t find any available professionals matching your service type, date, or time slot. Please try selecting a different date or time.';
+    final mainIcon = isNetworkError ? Icons.error_outline_rounded : Icons.search_off_rounded;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
       child: Column(
@@ -458,14 +470,14 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: const Color(0xFFB94A4A), width: 1.5),
             ),
-            child: const Row(
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.warning_amber_rounded, color: Color(0xFFB94A4A), size: 16),
-                SizedBox(width: 8),
+                Icon(isNetworkError ? Icons.error_outline_rounded : Icons.warning_amber_rounded, color: const Color(0xFFB94A4A), size: 16),
+                const SizedBox(width: 8),
                 Text(
-                  'NO PROFESSIONALS AVAILABLE',
-                  style: TextStyle(
+                  badgeText,
+                  style: const TextStyle(
                     color: Color(0xFFB94A4A),
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
@@ -493,21 +505,21 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
             ),
             child: Column(
               children: [
-                const Icon(Icons.search_off_rounded, size: 64, color: Color(0xFFD4A5A5)),
+                Icon(mainIcon, size: 64, color: const Color(0xFFD4A5A5)),
                 const SizedBox(height: 20),
-                const Text(
-                  'No professionals found',
-                  style: TextStyle(
+                Text(
+                  titleText,
+                  style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                     color: HestiaColors.textDark,
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'We couldn\'t find any available professionals in your zone right now. Please try again shortly.',
+                Text(
+                  descText,
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 14,
                     color: HestiaColors.textMedium,
                     height: 1.4,
@@ -520,27 +532,59 @@ class _ChooseProfessionalScreenState extends State<ChooseProfessionalScreen> {
                     setState(() {
                       _isSearching = true;
                       _fetchError = false;
+                      _noProfessionalsFound = false;
                       _matchedProfessional = null;
                       _professionals = [];
                     });
                     _fetchAndSearch();
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 12),
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                     decoration: BoxDecoration(
                       color: HestiaColors.primary,
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(28),
                     ),
-                    child: const Text(
-                      'Try again',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                    child: const Center(
+                      child: Text(
+                        'Try Search Again',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
                       ),
                     ),
                   ),
                 ),
+                if (!isNetworkError) ...[
+                  const SizedBox(height: 12),
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      Navigator.pop(context);
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(color: HestiaColors.primary, width: 1.5),
+                      ),
+                      child: const Center(
+                        child: Text(
+                          'Modify Date & Time',
+                          style: TextStyle(
+                            color: HestiaColors.primary,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

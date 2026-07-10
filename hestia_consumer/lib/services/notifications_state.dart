@@ -1,129 +1,176 @@
-import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'supabase_service.dart';
 
-enum NotificationIconType { clock, play, location, person }
-
-class HestiaNotification {
-  final String id;
-  final String title;
-  final String description;
-  final String timeAgo;
-  final String section; // 'TODAY' or 'YESTERDAY'
-  final bool isUnread;
-  final NotificationIconType iconType;
-
-  HestiaNotification({
-    required this.id,
-    required this.title,
-    required this.description,
-    required this.timeAgo,
-    required this.section,
-    required this.isUnread,
-    required this.iconType,
-  });
-
-  HestiaNotification copyWith({
-    bool? isUnread,
-  }) {
-    return HestiaNotification(
-      id: id,
-      title: title,
-      description: description,
-      timeAgo: timeAgo,
-      section: section,
-      isUnread: isUnread ?? this.isUnread,
-      iconType: iconType,
-    );
-  }
-}
-
-class NotificationsState extends ChangeNotifier {
+class NotificationsState {
   static final NotificationsState instance = NotificationsState._internal();
 
   NotificationsState._internal();
 
-  final List<HestiaNotification> _notifications = [
-    HestiaNotification(
-      id: '0',
-      title: 'Rate your session with Sunita',
-      description: 'Your session has ended. Tap here to rate Sunita Rao\'s care.',
-      timeAgo: '30 min ago',
-      section: 'TODAY',
-      isUnread: true,
-      iconType: NotificationIconType.person,
-    ),
-    HestiaNotification(
-      id: '1',
-      title: 'Activity update from Sunita',
-      description: 'Newborn bathed and swaddled comfortably',
-      timeAgo: '2 min ago',
-      section: 'TODAY',
-      isUnread: true,
-      iconType: NotificationIconType.clock,
-    ),
-    HestiaNotification(
-      id: '2',
-      title: 'Session started',
-      description: 'Sunita Rao has started your Post-Delivery Care session',
-      timeAgo: '1 hr 26 min ago',
-      section: 'TODAY',
-      isUnread: true,
-      iconType: NotificationIconType.play,
-    ),
-    HestiaNotification(
-      id: '3',
-      title: 'Sunita is on the way',
-      description: 'ETA 23 minutes · 2.4 km away from your address',
-      timeAgo: '2 hrs ago',
-      section: 'TODAY',
-      isUnread: false,
-      iconType: NotificationIconType.location,
-    ),
-    HestiaNotification(
-      id: '4',
-      title: 'Professional assigned',
-      description: 'Sunita Rao has been assigned to your booking today',
-      timeAgo: '3 hrs ago',
-      section: 'TODAY',
-      isUnread: false,
-      iconType: NotificationIconType.person,
-    ),
-  ];
+  final List<RealtimeChannel> _realtimeChannels = [];
+  FlutterLocalNotificationsPlugin? _localNotifications;
+  Set<String> _watchedBookingIds = <String>{};
+  Set<String> _watchedHubIds = <String>{};
+  final Set<String> _shownNotificationKeys = <String>{};
 
-  List<HestiaNotification> get notifications => List.unmodifiable(_notifications);
-
-  int get unreadCount => _notifications.where((n) => n.isUnread).length;
-
-  void markAsRead(String id) {
-    final index = _notifications.indexWhere((n) => n.id == id);
-    if (index != -1 && _notifications[index].isUnread) {
-      _notifications[index] = _notifications[index].copyWith(isUnread: false);
-      notifyListeners();
-    }
+  Future<void> initLocalNotifications() async {
+    _localNotifications = FlutterLocalNotificationsPlugin();
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const iosInit = DarwinInitializationSettings();
+    const initSettings = InitializationSettings(android: androidInit, iOS: iosInit);
+    await _localNotifications?.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (details) {
+        // Deep-link handling can be added here when needed.
+      },
+    );
+    await requestPermissions();
   }
 
-  void markAllAsRead() {
-    bool changed = false;
-    for (int i = 0; i < _notifications.length; i++) {
-      if (_notifications[i].isUnread) {
-        _notifications[i] = _notifications[i].copyWith(isUnread: false);
-        changed = true;
-      }
-    }
-    if (changed) {
-      notifyListeners();
-    }
+  Future<void> requestPermissions() async {
+    if (_localNotifications == null) return;
+
+    final android = _localNotifications!
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    await android?.requestNotificationsPermission();
+
+    final ios = _localNotifications!
+        .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
+    await ios?.requestPermissions(alert: true, badge: true, sound: true);
+
+    final macos = _localNotifications!
+        .resolvePlatformSpecificImplementation<MacOSFlutterLocalNotificationsPlugin>();
+    await macos?.requestPermissions(alert: true, badge: true, sound: true);
   }
 
-  void dismissNotification(String id) {
-    final index = _notifications.indexWhere((n) => n.id == id);
-    if (index != -1) {
-      _notifications.removeAt(index);
-      notifyListeners();
-    }
+  Future<void> showLocalNotification(Map<String, dynamic> row) async {
+    if (_localNotifications == null) return;
+
+    const androidDetails = AndroidNotificationDetails(
+      'hestia_channel',
+      'Hestia Notifications',
+      channelDescription: 'Realtime alerts for Hestia sessions',
+      importance: Importance.max,
+      priority: Priority.high,
+    );
+    const iosDetails = DarwinNotificationDetails();
+    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+
+    final id = row['id']?.toString().hashCode ?? 0;
+    final title = row['title']?.toString() ?? 'Hestia Update';
+    final body = row['body']?.toString() ?? '';
+
+    await _localNotifications?.show(id, title, body, details);
   }
 
-  void addNotification(HestiaNotification notification) {
-    _notifications.insert(0, notification);
-    notifyListeners();
+  Future<void> initialize() async {
+    disposeSubscription();
+
+    final user = SupabaseService.currentUser;
+    if (user == null) return;
+    _watchedBookingIds = await SupabaseService.getUserBookingIds(user.id);
+    _watchedHubIds = await SupabaseService.getCurrentUserHubIds(user.id);
+
+    final userChannel = SupabaseService.client
+        .channel('client_notifications_${user.id}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'user_notifications',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: user.id,
+          ),
+          callback: (payload) async {
+            await _handleRealtimeNotification(payload.newRecord);
+          },
+        )
+        .subscribe();
+    _realtimeChannels.add(userChannel);
+
+    final hubBroadcastChannel = SupabaseService.client
+        .channel('consumer_hub_broadcasts_${user.id}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'notifications',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'target_app',
+            value: 'consumer',
+          ),
+          callback: (payload) async {
+            final row = payload.newRecord;
+            if (_isRelevantBroadcast(row, user.id, _watchedHubIds)) {
+              await _handleRealtimeNotification(row);
+            }
+          },
+        )
+        .subscribe();
+    _realtimeChannels.add(hubBroadcastChannel);
+
+    final arrivalChannel = SupabaseService.client
+        .channel('consumer_arrivals_${user.id}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'sessions',
+          callback: (payload) async {
+            final row = payload.newRecord;
+            final status = row['status']?.toString().toLowerCase();
+            final bookingId = row['booking_id']?.toString();
+            final sessionId = row['id']?.toString();
+            if (status != 'arrived' || bookingId == null || sessionId == null) {
+              return;
+            }
+
+            if (!_watchedBookingIds.contains(bookingId)) {
+              _watchedBookingIds = await SupabaseService.getUserBookingIds(user.id);
+              if (!_watchedBookingIds.contains(bookingId)) {
+                return;
+              }
+            }
+
+            final bookingData = await SupabaseService.getBookingStatus(bookingId);
+            final caregiverName =
+                bookingData?['caregiver_name']?.toString() ?? 'Your professional';
+            await _handleRealtimeNotification({
+              'id': 'arrival_$sessionId',
+              'title': 'Professional arrived',
+              'body': '$caregiverName has confirmed arrival at your address.',
+            });
+          },
+        )
+        .subscribe();
+    _realtimeChannels.add(arrivalChannel);
+  }
+
+  void disposeSubscription() {
+    for (final channel in _realtimeChannels) {
+      SupabaseService.client.removeChannel(channel);
+    }
+    _realtimeChannels.clear();
+    _shownNotificationKeys.clear();
+  }
+
+  Future<void> _handleRealtimeNotification(Map<String, dynamic> row) async {
+    final id = row['id']?.toString() ?? '';
+    if (id.isEmpty || _shownNotificationKeys.contains(id)) return;
+    _shownNotificationKeys.add(id);
+    await showLocalNotification(row);
+  }
+
+  bool _isRelevantBroadcast(
+    Map<String, dynamic> row,
+    String userId,
+    Set<String> hubIds,
+  ) {
+    final audienceType = row['audience_type']?.toString() ?? 'all';
+    final audienceId = row['audience_id']?.toString();
+    if (audienceType == 'all') return true;
+    if (audienceType == 'user') return audienceId == userId;
+    if (audienceType == 'hub') return audienceId != null && hubIds.contains(audienceId);
+    return false;
   }
 }

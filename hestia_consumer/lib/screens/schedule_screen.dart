@@ -183,6 +183,26 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     return total;
   }
 
+  String _getSelectedDurationLabel() {
+    final totalMinutes =
+        _servicesMap.values.fold<int>(0, (sum, item) => sum + item);
+    if (totalMinutes <= 0) {
+      return '0.5 hr';
+    }
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    if (hours == 0) {
+      return '$minutes min';
+    }
+    if (minutes == 0) {
+      return hours == 1 ? '1 hr' : '$hours hrs';
+    }
+    if (minutes == 30) {
+      return hours == 1 ? '1.5 hrs' : '$hours.5 hrs';
+    }
+    return '${(totalMinutes / 60).toStringAsFixed(1)} hrs';
+  }
+
   @override
   Widget build(BuildContext context) {
     final itemTotal = _getItemTotal();
@@ -312,8 +332,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                 builder: (context) => RepeatBookingScreen(
                                   serviceTitle: matchedTitle,
                                   selectedDate: DateTime.now(),
-                                  selectedTime: '12:00 PM',
-                                  selectedDuration: '3 hrs',
+                                  selectedDuration: _getSelectedDurationLabel(),
                                 ),
                               ),
                             );
@@ -508,10 +527,18 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                       color: HestiaColors.primary.withValues(alpha: 0.08),
                                       borderRadius: BorderRadius.circular(12),
                                     ),
-                                    child: Icon(
-                                      detail.icon,
-                                      color: HestiaColors.primary,
-                                      size: 24,
+                                    child: Image.asset(
+                                      detail.iconAsset,
+                                      width: 24,
+                                      height: 24,
+                                      fit: BoxFit.contain,
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return Icon(
+                                          Icons.medical_services_outlined,
+                                          color: HestiaColors.primary,
+                                          size: 24,
+                                        );
+                                      },
                                     ),
                                   ),
                                   const SizedBox(width: 12),
@@ -1081,8 +1108,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                 builder: (context) => RepeatBookingScreen(
                                   serviceTitle: matchedTitle,
                                   selectedDate: DateTime.now(),
-                                  selectedTime: '12:00 PM',
-                                  selectedDuration: '3 hrs',
+                                  selectedDuration: _getSelectedDurationLabel(),
                                 ),
                               ),
                             );
@@ -1098,7 +1124,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                                     serviceTitle: matchedTitle,
                                     selectedDate: _scheduledDate!,
                                     selectedTime: _scheduledTimeSlot!,
-                                    selectedDuration: '3 hrs',
+                                    selectedDuration: _getSelectedDurationLabel(),
                                     repeatOption: 'Once',
                                     endsAfter: '1 session',
                                     preferSameProfessional: false,
@@ -1113,6 +1139,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                           child: Text(
                             _activeTab == 'Recurring'
                                 ? 'Select frequency & time slot'
+                                : _activeTab == 'Instant'
+                                    ? 'Proceed to payment'
                                 : (_scheduledDate == null || _scheduledTimeSlot == null
                                     ? 'Select time slot'
                                     : 'Proceed to pay'),

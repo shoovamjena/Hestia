@@ -170,7 +170,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
   Future<void> _loadProfileData() async {
     final user = SupabaseService.currentUser;
     if (user != null) {
-      _userEmail = user.email ?? '';
+      _userEmail = SupabaseService.currentUserEmail;
       _userPhone = SupabaseService.currentUserPhone;
       try {
         final profile = await SupabaseService.getUserProfile(user.id);
@@ -1451,7 +1451,7 @@ class _ReviewConfirmScreenState extends State<ReviewConfirmScreen> {
                       ),
                       const SizedBox(height: 6),
                       DropdownButtonFormField<String>(
-                        value: selectedRole,
+                        initialValue: selectedRole,
                         hint: const Text('Select service preferred'),
                         decoration: InputDecoration(
                           filled: true,

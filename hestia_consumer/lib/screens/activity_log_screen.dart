@@ -1,13 +1,88 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/colors.dart';
+import '../services/supabase_service.dart';
 
-class ActivityLogScreen extends StatelessWidget {
+class ActivityLogScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
 
   const ActivityLogScreen({super.key, required this.bookingData});
 
   @override
+  State<ActivityLogScreen> createState() => _ActivityLogScreenState();
+}
+
+class _ActivityLogScreenState extends State<ActivityLogScreen> {
+  final List<Map<String, dynamic>> _activityLogs = [];
+  RealtimeChannel? _activityChannel;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadActivityLogs();
+    _subscribeToActivityLogs();
+  }
+
+  @override
+  void dispose() {
+    if (_activityChannel != null) {
+      SupabaseService.client.removeChannel(_activityChannel!);
+    }
+    super.dispose();
+  }
+
+  Future<void> _loadActivityLogs() async {
+    final sessionId = widget.bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _activityLogs.clear();
+          _isLoading = false;
+        });
+      }
+      return;
+    }
+
+    final logs = await SupabaseService.getActivityLogs(sessionId);
+    if (!mounted) return;
+    setState(() {
+      _activityLogs
+        ..clear()
+        ..addAll(logs);
+      _isLoading = false;
+    });
+  }
+
+  void _subscribeToActivityLogs() {
+    final sessionId = widget.bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) return;
+
+    _activityChannel = Supabase.instance.client
+        .channel('session_activity_$sessionId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'activity_logs',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'session_id',
+            value: sessionId,
+          ),
+          callback: (payload) {
+            if (!mounted) return;
+            setState(() {
+              _activityLogs.insert(0, Map<String, dynamic>.from(payload.newRecord));
+            });
+          },
+        )
+        .subscribe();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final bookingData = widget.bookingData;
     final caregiverName = bookingData['caregiver_name'] ?? 'Sunita Rao';
     final serviceTitle = bookingData['title'] ?? 'Post-Delivery Care';
 
@@ -23,73 +98,6 @@ class ActivityLogScreen extends StatelessWidget {
       if (hour > 12) hour -= 12;
       if (hour == 0) hour = 12;
       return '$hour:$minute $period';
-    }
-
-    final actualStartObj = bookingData['actual_start'];
-    final List<Map<String, dynamic>> timelineItems = [];
-
-    if (actualStartObj != null) {
-      final DateTime actualStart = actualStartObj is DateTime 
-          ? actualStartObj 
-          : DateTime.parse(actualStartObj.toString()).toLocal();
-      final elapsedMinutes = DateTime.now().difference(actualStart).inMinutes;
-
-      final List<Map<String, dynamic>> rawLogs = [
-        {
-          'minutesOffset': 70,
-          'title': 'Newborn bathed and swaddled',
-          'subtitle': 'Bathing & grooming',
-        },
-        {
-          'minutesOffset': 44,
-          'title': 'Breastfeeding positioning assisted',
-          'subtitle': 'Feeding support',
-        },
-        {
-          'minutesOffset': 27,
-          'title': 'Light breakfast prepared for mother',
-          'subtitle': 'Meal assistance',
-        },
-        {
-          'minutesOffset': 14,
-          'title': 'Mother rest period — Aryan monitored',
-          'subtitle': 'Rest support',
-        },
-        {
-          'minutesOffset': 0,
-          'title': 'Session started. Initial check completed',
-          'subtitle': 'Session start',
-        },
-      ];
-
-      bool firstAdded = false;
-      for (final raw in rawLogs) {
-        final offset = raw['minutesOffset'] as int;
-        if (elapsedMinutes >= offset) {
-          final logTime = actualStart.add(Duration(minutes: offset)).toLocal();
-          final hour = logTime.hour.toString().padLeft(2, '0');
-          final minute = logTime.minute.toString().padLeft(2, '0');
-
-          timelineItems.add({
-            'time': '$hour:$minute',
-            'title': raw['title'],
-            'subtitle': raw['subtitle'],
-            'isLatest': !firstAdded,
-            'isGreenDot': !firstAdded,
-          });
-          firstAdded = true;
-        }
-      }
-    }
-
-    if (timelineItems.isEmpty) {
-      timelineItems.add({
-        'time': '--:--',
-        'title': 'No activity logged yet',
-        'subtitle': 'Activity will appear here as the session progresses',
-        'isLatest': true,
-        'isGreenDot': true,
-      });
     }
 
     return Container(
@@ -242,7 +250,7 @@ class ActivityLogScreen extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        'Auto-refreshes every 60s',
+                        'Updates live',
                         style: TextStyle(
                           fontSize: 12,
                           color: HestiaColors.textLight,
@@ -253,122 +261,155 @@ class ActivityLogScreen extends StatelessWidget {
 
                   const SizedBox(height: 20),
 
-                  // Timeline list
-                  ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: timelineItems.length,
-                    itemBuilder: (context, index) {
-                      final item = timelineItems[index];
-                      final isLast = index == timelineItems.length - 1;
-
-                      return IntrinsicHeight(
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            // Time column
-                            SizedBox(
-                              width: 44,
-                              child: Padding(
-                                padding: const EdgeInsets.only(top: 2.0),
-                                child: Text(
-                                  item['time'],
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                    color: HestiaColors.textLight,
-                                  ),
-                                ),
-                              ),
+                  if (_isLoading)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 48),
+                      child: Center(
+                        child: CircularProgressIndicator(color: HestiaColors.primary),
+                      ),
+                    )
+                  else if (_activityLogs.isEmpty)
+                    _glassCard(
+                      padding: const EdgeInsets.all(18),
+                      borderRadius: 18,
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'No activity logged yet',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: HestiaColors.textDark,
                             ),
-                            const SizedBox(width: 8),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'Activity will appear here as the session progresses.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: HestiaColors.textLight,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _activityLogs.length,
+                      itemBuilder: (context, index) {
+                        final item = _activityLogs[index];
+                        final loggedAt = item['logged_at'];
+                        final isLatest = index == 0;
+                        final primaryText = (item['note']?.toString().trim().isNotEmpty ?? false)
+                            ? item['note'].toString().trim()
+                            : (item['activity_type']?.toString() ?? 'Activity update');
+                        final secondaryType = item['activity_type']?.toString() ?? 'Activity';
+                        final secondaryText = '$secondaryType · ${formatTime(loggedAt)}';
+                        final isLast = index == _activityLogs.length - 1;
 
-                            // Timeline node connector column
-                            Column(
+                        return Padding(
+                          padding: EdgeInsets.only(bottom: isLast ? 0 : 16),
+                          child: _glassCard(
+                            padding: const EdgeInsets.all(16),
+                            borderRadius: 20,
+                            tint: isLatest
+                                ? Colors.white.withValues(alpha: 0.18)
+                                : Colors.white.withValues(alpha: 0.12),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                // Dot
                                 Container(
-                                  width: 8,
-                                  height: 8,
-                                  margin: const EdgeInsets.only(top: 6),
+                                  width: 34,
+                                  height: 34,
                                   decoration: BoxDecoration(
-                                    color: item['isGreenDot']
-                                        ? const Color(0xFF2ECC71)
-                                        : const Color(0xFFF39C12),
+                                    color: isLatest
+                                        ? const Color(0x332ECC71)
+                                        : Colors.white.withValues(alpha: 0.16),
                                     shape: BoxShape.circle,
-                                  ),
-                                ),
-                                // Line
-                                if (!isLast)
-                                  Expanded(
-                                    child: Container(
-                                      width: 1.5,
-                                      color: const Color(0xFFE5DDD5),
-                                      margin: const EdgeInsets.symmetric(vertical: 4),
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.18),
                                     ),
                                   ),
-                              ],
-                            ),
-                            const SizedBox(width: 14),
-
-                            // Timeline details column
-                            Expanded(
-                              child: Padding(
-                                padding: const EdgeInsets.only(bottom: 24.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            item['title'],
-                                            style: const TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.bold,
-                                              color: HestiaColors.textDark,
-                                              height: 1.35,
-                                            ),
-                                          ),
-                                        ),
-                                        if (item['isLatest']) ...[
-                                          const SizedBox(width: 8),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                            decoration: BoxDecoration(
-                                              color: const Color(0xFFE8F5E9),
-                                              borderRadius: BorderRadius.circular(4),
-                                            ),
-                                            child: const Text(
-                                              'New',
-                                              style: TextStyle(
-                                                fontSize: 9,
+                                  alignment: Alignment.center,
+                                  child: Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      color: isLatest
+                                          ? const Color(0xFF2ECC71)
+                                          : const Color(0xFFF3C16B),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              primaryText,
+                                              style: const TextStyle(
+                                                fontSize: 14,
                                                 fontWeight: FontWeight.bold,
-                                                color: Color(0xFF2E7D32),
+                                                color: Colors.white,
+                                                height: 1.35,
                                               ),
                                             ),
                                           ),
+                                          if (isLatest) ...[
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0x332ECC71),
+                                                borderRadius: BorderRadius.circular(999),
+                                              ),
+                                              child: const Text(
+                                                'New',
+                                                style: TextStyle(
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ],
-                                      ],
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      item['subtitle'],
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        color: HestiaColors.textLight,
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        secondaryText,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.white.withValues(alpha: 0.82),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  formatTime(loggedAt),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white.withValues(alpha: 0.86),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+                          ),
+                        );
+                      },
+                    ),
                 ],
               ),
             ),
@@ -421,6 +462,39 @@ class ActivityLogScreen extends StatelessWidget {
         ],
       ),
      ),
+    );
+  }
+
+  Widget _glassCard({
+    required Widget child,
+    EdgeInsetsGeometry? padding,
+    double borderRadius = 20,
+    Color? tint,
+  }) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(borderRadius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: tint ?? Colors.white.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(borderRadius),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.18),
+              width: 1.1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 14,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
     );
   }
 }

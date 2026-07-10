@@ -877,6 +877,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
         await SupabaseService.createProfile(
           id: user.id,
           fullName: fullName,
+          email: email,
           phone: phone,
         );
       } catch (e) {

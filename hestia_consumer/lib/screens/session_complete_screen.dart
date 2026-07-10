@@ -15,6 +15,7 @@ class SessionCompleteScreen extends StatefulWidget {
 class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
   int _userRating = 4; // Defaults to 4 gold stars as seen in the image
   final Set<String> _selectedTags = {};
+  int _activityLogsCount = 0;
 
   final List<String> _feedbackTags = [
     'Punctual',
@@ -24,10 +25,30 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _loadActivityLogCount();
+  }
+
+  Future<void> _loadActivityLogCount() async {
+    final sessionId = widget.bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) return;
+    final logs = await SupabaseService.getActivityLogs(sessionId);
+    if (!mounted) return;
+    setState(() {
+      _activityLogsCount = logs.length;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final caregiverName = widget.bookingData['caregiver_name'] ?? 'Sunita Rao';
     final serviceTitle = widget.bookingData['title'] ?? 'Post-Delivery Care';
     final totalAmount = widget.bookingData['amount'] ?? 1497;
+    final professionalRating =
+        double.tryParse(widget.bookingData['professional_rating']?.toString() ?? '');
+    final professionalSessions =
+        int.tryParse(widget.bookingData['professional_total_sessions']?.toString() ?? '') ?? 0;
 
     String formatTime(dynamic timeObj) {
       if (timeObj == null) return '--:--';
@@ -45,21 +66,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
 
     final actualStartObj = widget.bookingData['actual_start'];
     final actualEndObj = widget.bookingData['actual_end'];
-    
-    int visibleLogsCount = 0;
-    if (actualStartObj != null) {
-      final DateTime actualStart = actualStartObj is DateTime 
-          ? actualStartObj 
-          : DateTime.parse(actualStartObj.toString()).toLocal();
-      final DateTime referenceTime = actualEndObj != null 
-          ? (actualEndObj is DateTime ? actualEndObj : DateTime.parse(actualEndObj.toString()))
-          : DateTime.now();
-      final elapsedMinutes = referenceTime.toUtc().difference(actualStart.toUtc()).inMinutes;
-      final offsets = [70, 44, 27, 14, 0];
-      for (final offset in offsets) {
-        if (elapsedMinutes >= offset) visibleLogsCount++;
-      }
-    }
+    final durationText = _buildDurationText(actualStartObj, actualEndObj, widget.bookingData['duration_hours']);
 
     return Container(
       decoration: const BoxDecoration(
@@ -130,7 +137,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '$serviceTitle · 3 hrs 2 min',
+                        '$serviceTitle · $durationText',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.white.withValues(alpha: 0.85),
@@ -161,12 +168,21 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                       child: Column(
                         children: [
                           _buildDetailRow('Professional', caregiverName),
+                          if (professionalRating != null && professionalRating > 0) ...[
+                            const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
+                            _buildDetailRow(
+                              'Professional rating',
+                              professionalSessions > 0
+                                  ? '${professionalRating.toStringAsFixed(1)} ($professionalSessions ${professionalSessions == 1 ? "session" : "sessions"})'
+                                  : professionalRating.toStringAsFixed(1),
+                            ),
+                          ],
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
                           _buildDetailRow('Started', formatTime(widget.bookingData['actual_start'])),
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
                           _buildDetailRow('Ended', formatTime(widget.bookingData['actual_end'])),
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
-                          _buildDetailRow('Activities logged', '$visibleLogsCount ${visibleLogsCount == 1 ? "entry" : "entries"}'),
+                          _buildDetailRow('Activities logged', '$_activityLogsCount ${_activityLogsCount == 1 ? "entry" : "entries"}'),
                           const Divider(color: Color(0xFFF0EAE4), height: 32, thickness: 1),
                           _buildDetailRow(
                             'Amount', 
@@ -334,5 +350,31 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
         ),
       ],
     );
+  }
+
+  String _buildDurationText(dynamic actualStartObj, dynamic actualEndObj, dynamic durationHoursObj) {
+    DateTime? start;
+    DateTime? end;
+    if (actualStartObj != null) {
+      start = actualStartObj is DateTime ? actualStartObj : DateTime.tryParse(actualStartObj.toString());
+    }
+    if (actualEndObj != null) {
+      end = actualEndObj is DateTime ? actualEndObj : DateTime.tryParse(actualEndObj.toString());
+    }
+
+    int durationMinutes = 0;
+    if (start != null && end != null) {
+      durationMinutes = end.toUtc().difference(start.toUtc()).inMinutes;
+    } else {
+      final hours = (durationHoursObj as num?)?.toDouble() ?? 0.0;
+      durationMinutes = (hours * 60).round();
+    }
+
+    if (durationMinutes <= 0) return '--';
+    final hours = durationMinutes ~/ 60;
+    final minutes = durationMinutes % 60;
+    if (hours == 0) return '$minutes min';
+    if (minutes == 0) return '$hours hr';
+    return '$hours hr $minutes min';
   }
 }

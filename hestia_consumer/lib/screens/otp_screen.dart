@@ -220,6 +220,7 @@ class _OtpScreenState extends State<OtpScreen> {
             await SupabaseService.createProfile(
               id: user.id,
               fullName: SupabaseService.pendingSignUpName!,
+              email: SupabaseService.currentUserEmail,
               phone: widget.contactInfo,
             );
           }

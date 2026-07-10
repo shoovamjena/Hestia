@@ -13,6 +13,9 @@ import 'chat_screen.dart';
 import 'emergency_screen.dart';
 import 'rate_session_screen.dart';
 
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
+
 class TrackingScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
 
@@ -24,6 +27,7 @@ class TrackingScreen extends StatefulWidget {
 
 class _TrackingScreenState extends State<TrackingScreen> {
   late Map<String, dynamic> _bookingData;
+  final List<Map<String, dynamic>> _activityLogs = [];
   bool _isOnTheWayView = true;
   late Timer _stopwatchTimer;
   Timer? _statusTimer;
@@ -31,13 +35,29 @@ class _TrackingScreenState extends State<TrackingScreen> {
   bool _isShowingVerificationDialog = false;
   bool _isApologizing = false;
 
+  RealtimeChannel? _realtimeChannel;
+  RealtimeChannel? _activityChannel;
+  String _enteredCode = '';
+  String? _verificationError;
+  bool _isStartingSession = false;
+  bool _isEndingSession = false;
+  final TextEditingController _codeController = TextEditingController();
+  final FocusNode _codeFocusNode = FocusNode();
+
   LatLng? _hubLocation;
   LatLng? _userLocation;
+  LatLng? _professionalLocation;
+  Timer? _locationTimer;
   List<LatLng> _routePoints = [];
   double _routeDistanceKm = 0.0;
   int _routeDurationMin = 0;
   bool _isLoadingMap = true;
   final MapController _mapController = MapController();
+  LatLng? _currentMapCenter;
+  double _currentMapZoom = 13.0;
+  final DraggableScrollableController _onTheWaySheetController =
+      DraggableScrollableController();
+  bool _isOnTheWaySheetExpanded = false;
 
   @override
   void initState() {
@@ -48,6 +68,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _startStopwatch();
     _startStatusPolling();
     _loadRouteAndCoordinates();
+    _loadActivityLogs();
+    _initRealtimeSubscription();
+    _subscribeToActivityLogs();
+    _startLocationTracking();
 
     // Check for no-show immediately on launch
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -59,6 +83,16 @@ class _TrackingScreenState extends State<TrackingScreen> {
   void dispose() {
     _stopwatchTimer.cancel();
     _statusTimer?.cancel();
+    _locationTimer?.cancel();
+    _codeController.dispose();
+    _codeFocusNode.dispose();
+    _onTheWaySheetController.dispose();
+    if (_realtimeChannel != null) {
+      SupabaseService.client.removeChannel(_realtimeChannel!);
+    }
+    if (_activityChannel != null) {
+      SupabaseService.client.removeChannel(_activityChannel!);
+    }
     super.dispose();
   }
 
@@ -68,6 +102,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
       if (bookingId != null) {
         final updated = await SupabaseService.getBookingStatus(bookingId.toString());
         if (updated != null && mounted) {
+          final previousRouteMode = _shouldRouteFromProfessionalLiveLocation();
           final shouldLoadRoute = _hubLocation == null &&
               (updated['hub_address'] != null || updated['user_address'] != null);
           setState(() {
@@ -80,7 +115,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
               _isOnTheWayView = true;
             }
           });
-          if (shouldLoadRoute) {
+          final routeModeChanged = previousRouteMode !=
+              _shouldRouteFromProfessionalLiveLocation();
+          if (shouldLoadRoute || routeModeChanged) {
             _loadRouteAndCoordinates();
           }
           _checkArrivalRequest(updated);
@@ -94,13 +131,14 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _stopwatchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
-          final actualEndObj = _bookingData['actual_end'];
-          if (actualEndObj != null) {
-            final endTime = actualEndObj is DateTime 
-                ? actualEndObj 
-                : DateTime.parse(actualEndObj.toString());
-            // Countdown: remaining seconds until end_time
-            _secondsElapsed = endTime.toUtc().difference(DateTime.now().toUtc()).inSeconds;
+          final actualStartObj = _bookingData['actual_start'];
+          if (actualStartObj != null) {
+            final startTime = actualStartObj is DateTime 
+                ? actualStartObj 
+                : DateTime.parse(actualStartObj.toString());
+            // Elapsed time count up from start_time
+            _secondsElapsed = DateTime.now().toUtc().difference(startTime.toUtc()).inSeconds;
+            if (_secondsElapsed < 0) _secondsElapsed = 0;
           } else {
             _secondsElapsed = 0;
           }
@@ -118,9 +156,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _checkArrivalRequest(Map<String, dynamic> bookingData) {
-    if (bookingData['arrival_requested'] == true && !_isShowingVerificationDialog) {
-      _showArrivalVerificationDialog(bookingData);
-    }
+    // Disabled old verification dialog in favor of the new inline verification UI card
   }
 
   void _showArrivalVerificationDialog(Map<String, dynamic> bookingData) {
@@ -483,6 +519,59 @@ class _TrackingScreenState extends State<TrackingScreen> {
     return cleanName;
   }
 
+  String _formatProfessionalRating() {
+    final rating = double.tryParse(_bookingData['professional_rating']?.toString() ?? '');
+    if (rating == null || rating <= 0) return '--';
+    return rating.toStringAsFixed(1);
+  }
+
+  String _formatProfessionalSessions() {
+    final count = int.tryParse(_bookingData['professional_total_sessions']?.toString() ?? '') ?? 0;
+    if (count <= 0) return '';
+    return '$count ${count == 1 ? "session" : "sessions"}';
+  }
+
+  String _normalizedTrackingStatus() {
+    return _bookingData['status']?.toString().trim().toLowerCase() ?? '';
+  }
+
+  bool _shouldRouteFromProfessionalLiveLocation() {
+    final status = _normalizedTrackingStatus();
+    return status == 'transit' ||
+        status == 'arrived' ||
+        status == 'started' ||
+        status == 'active' ||
+        status == 'in_progress' ||
+        status == 'completed';
+  }
+
+  LatLng? _getRouteStartLocation() {
+    if (_shouldRouteFromProfessionalLiveLocation() &&
+        _professionalLocation != null) {
+      return _professionalLocation;
+    }
+    return _hubLocation;
+  }
+
+  String _formatRouteSourceLabel() {
+    if (_shouldRouteFromProfessionalLiveLocation() &&
+        _professionalLocation != null) {
+      final lat = _professionalLocation!.latitude.toStringAsFixed(5);
+      final lng = _professionalLocation!.longitude.toStringAsFixed(5);
+      return 'Professional live location ($lat, $lng)';
+    }
+    if ((_bookingData['hub_name']?.toString().trim().isNotEmpty ?? false)) {
+      return '${_bookingData['hub_name']} hub';
+    }
+    return 'Professional location unavailable';
+  }
+
+  String _formatRouteDestinationLabel() {
+    final address = _bookingData['user_address']?.toString().trim() ?? '';
+    if (address.isNotEmpty) return address;
+    return 'Booking address unavailable';
+  }
+
   Future<LatLng?> _geocodeAddress(String query) async {
     if (MapboxConfig.accessToken.isEmpty) return null;
     try {
@@ -513,18 +602,35 @@ class _TrackingScreenState extends State<TrackingScreen> {
       return;
     }
     
-    final hubLoc = await _geocodeAddress(hubAddr);
-    final userLoc = await _geocodeAddress(userAddr);
+    final hubLoc = _hubLocation ?? await _geocodeAddress(hubAddr);
+    final userLoc = _userLocation ?? await _geocodeAddress(userAddr);
     
-    if (hubLoc != null && userLoc != null && mounted) {
-      setState(() {
-        _hubLocation = hubLoc;
-        _userLocation = userLoc;
-      });
+    if (hubLoc != null && userLoc != null) {
+      if (mounted) {
+        setState(() {
+          _hubLocation = hubLoc;
+          _userLocation = userLoc;
+        });
+      }
       
+      // If we don't have a professional location in memory yet, try to load the latest from the database
+      if (_professionalLocation == null) {
+        final sessionId = _bookingData['session_id'];
+        if (sessionId != null) {
+          final latestLoc = await SupabaseService.getLatestProfessionalLocation(sessionId.toString());
+          if (latestLoc != null && mounted) {
+            setState(() {
+              _professionalLocation = LatLng(latestLoc['latitude']!, latestLoc['longitude']!);
+            });
+          }
+        }
+      }
+
+      final startLoc = _getRouteStartLocation() ?? hubLoc;
+
       // Fetch Route from Mapbox Directions API
       try {
-        final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/${hubLoc.longitude},${hubLoc.latitude};${userLoc.longitude},${userLoc.latitude}?geometries=geojson&access_token=${MapboxConfig.accessToken}';
+        final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/${startLoc.longitude},${startLoc.latitude};${userLoc.longitude},${userLoc.latitude}?geometries=geojson&access_token=${MapboxConfig.accessToken}';
         final response = await HttpClient().getUrl(Uri.parse(url)).then((req) => req.close()).then((res) => res.transform(utf8.decoder).join());
         final data = jsonDecode(response) as Map<String, dynamic>;
         final routes = data['routes'] as List?;
@@ -573,14 +679,25 @@ class _TrackingScreenState extends State<TrackingScreen> {
       );
     }
     
+    final LatLng startLoc = _getRouteStartLocation() ?? _hubLocation!;
+    final mapCenter = _currentMapCenter ??
+        LatLng(
+          (startLoc.latitude + _userLocation!.latitude) / 2,
+          (startLoc.longitude + _userLocation!.longitude) / 2,
+        );
+    
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
-        initialCenter: LatLng(
-          (_hubLocation!.latitude + _userLocation!.latitude) / 2,
-          (_hubLocation!.longitude + _userLocation!.longitude) / 2,
+        initialCenter: mapCenter,
+        initialZoom: _currentMapZoom,
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.all,
         ),
-        initialZoom: 12.5,
+        onPositionChanged: (position, hasGesture) {
+          _currentMapCenter = position.center;
+          _currentMapZoom = position.zoom;
+        },
       ),
       children: [
         TileLayer(
@@ -602,11 +719,14 @@ class _TrackingScreenState extends State<TrackingScreen> {
         MarkerLayer(
           markers: [
             Marker(
-              point: _hubLocation!,
+              point: startLoc,
               width: 40,
               height: 40,
-              child: const Icon(
-                Icons.store_mall_directory_rounded,
+              child: Icon(
+                _shouldRouteFromProfessionalLiveLocation() &&
+                        _professionalLocation != null
+                    ? Icons.directions_car_rounded
+                    : Icons.store_mall_directory_rounded,
                 color: HestiaColors.primary,
                 size: 30,
               ),
@@ -627,15 +747,48 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
+  Widget _mapChip({required IconData icon, required String label}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.26),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.16),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white, size: 14),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _formatEndsAtText() {
-    final actualEndObj = _bookingData['actual_end'];
-    if (actualEndObj == null) return 'Ends at --:-- · -- min left';
+    final actualStartObj = _bookingData['actual_start'];
+    if (actualStartObj == null) return 'Ends at --:-- · -- min left';
     
-    final DateTime actualEnd = actualEndObj is DateTime 
-        ? actualEndObj 
-        : DateTime.parse(actualEndObj.toString());
+    final DateTime actualStart = actualStartObj is DateTime 
+        ? actualStartObj 
+        : DateTime.parse(actualStartObj.toString());
         
-    final DateTime localEnd = actualEnd.toLocal();
+    final double durationHours = (_bookingData['duration_hours'] as num?)?.toDouble() ?? 2.0;
+    final int durationMinutes = (durationHours * 60).round();
+    final DateTime expectedEnd = actualStart.add(Duration(minutes: durationMinutes));
+        
+    final DateTime localEnd = expectedEnd.toLocal();
     int hour = localEnd.hour;
     final minute = localEnd.minute.toString().padLeft(2, '0');
     final period = hour >= 12 ? 'PM' : 'AM';
@@ -643,7 +796,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
     if (hour == 0) hour = 12;
     final endsAtStr = '$hour:$minute $period';
     
-    final difference = actualEnd.toUtc().difference(DateTime.now().toUtc());
+    final difference = expectedEnd.toUtc().difference(DateTime.now().toUtc());
     if (difference.isNegative) {
       return 'Ends at $endsAtStr · Completed';
     }
@@ -654,93 +807,98 @@ class _TrackingScreenState extends State<TrackingScreen> {
     } else {
       final hoursLeft = minutesLeft ~/ 60;
       final remainingMins = minutesLeft % 60;
-      return 'Ends at $endsAtStr · $hoursLeft hr $remainingMins min left';
+      if (remainingMins == 0) {
+        return 'Ends at $endsAtStr · $hoursLeft hr left';
+      } else {
+        return 'Ends at $endsAtStr · $hoursLeft hr $remainingMins min left';
+      }
     }
+  }
+
+  Future<void> _loadActivityLogs() async {
+    final sessionId = _bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _activityLogs.clear();
+        });
+      }
+      return;
+    }
+
+    final logs = await SupabaseService.getActivityLogs(sessionId);
+    if (!mounted) return;
+    setState(() {
+      _activityLogs
+        ..clear()
+        ..addAll(logs);
+    });
+  }
+
+  void _subscribeToActivityLogs() {
+    final sessionId = _bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) return;
+
+    _activityChannel = SupabaseService.client
+        .channel('tracking_activity_$sessionId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'activity_logs',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'session_id',
+            value: sessionId,
+          ),
+          callback: (payload) {
+            if (!mounted) return;
+            setState(() {
+              _activityLogs.insert(0, Map<String, dynamic>.from(payload.newRecord));
+            });
+          },
+        )
+        .subscribe();
+  }
+
+  String _formatActivityTime(dynamic timeObj) {
+    if (timeObj == null) return '--:--';
+    final parsed = timeObj is DateTime ? timeObj : DateTime.parse(timeObj.toString());
+    final local = parsed.toLocal();
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 
   int _getVisibleLogsCount() {
-    final actualStartObj = _bookingData['actual_start'];
-    if (actualStartObj == null) return 0;
-    
-    final DateTime actualStart = actualStartObj is DateTime 
-        ? actualStartObj 
-        : DateTime.parse(actualStartObj.toString()).toLocal();
-    final elapsedMinutes = DateTime.now().difference(actualStart).inMinutes;
-    
-    final offsets = [70, 44, 27, 0];
-    int count = 0;
-    for (final offset in offsets) {
-      if (elapsedMinutes >= offset) count++;
-    }
-    return count;
+    return _activityLogs.length;
   }
 
   Widget _buildActivityLogsList() {
-    final actualStartObj = _bookingData['actual_start'];
-    if (actualStartObj == null) {
+    if (_activityLogs.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8.0),
-        child: _logEntry('--:--', 'Waiting for session to start...', false, false),
+        child: _logEntry('--:--', 'No activity logged yet', false, false, subtitle: 'Updates from the professional will appear here'),
       );
     }
-    
-    final DateTime actualStart = actualStartObj is DateTime 
-        ? actualStartObj 
-        : DateTime.parse(actualStartObj.toString()).toLocal();
-    final elapsedMinutes = DateTime.now().difference(actualStart).inMinutes;
-    
-    final List<Map<String, dynamic>> rawLogs = [
-      {
-        'minutesOffset': 70,
-        'message': 'Newborn bathed and swaddled comfortably',
-        'isGreen': true,
-        'showNew': true,
-      },
-      {
-        'minutesOffset': 44,
-        'message': 'Breastfeeding positioning assisted, mother resting',
-        'isGreen': false,
-        'showNew': false,
-      },
-      {
-        'minutesOffset': 27,
-        'message': 'Light breakfast prepared for mother',
-        'isGreen': false,
-        'showNew': false,
-      },
-      {
-        'minutesOffset': 0,
-        'message': 'Session started. Checked on Aryan, settled well',
-        'isGreen': false,
-        'showNew': false,
-      },
-    ];
-    
+
     final List<Widget> children = [];
-    bool firstAdded = false;
-    for (final raw in rawLogs) {
-      final offset = raw['minutesOffset'] as int;
-      if (elapsedMinutes >= offset) {
-        final logTime = actualStart.add(Duration(minutes: offset)).toLocal();
-        final hour = logTime.hour.toString().padLeft(2, '0');
-        final minute = logTime.minute.toString().padLeft(2, '0');
-        
-        children.add(
-          _logEntry(
-            '$hour:$minute',
-            raw['message'],
-            !firstAdded ? true : raw['isGreen'],
-            !firstAdded ? true : raw['showNew'],
-          ),
-        );
-        firstAdded = true;
-      }
+    for (int index = 0; index < _activityLogs.length; index++) {
+      final log = _activityLogs[index];
+      final message = (log['note']?.toString().trim().isNotEmpty ?? false)
+          ? log['note'].toString().trim()
+          : (log['activity_type']?.toString() ?? 'Activity update');
+      final activityType = log['activity_type']?.toString() ?? 'Activity';
+      children.add(
+        _logEntry(
+          _formatActivityTime(log['logged_at']),
+          message,
+          index == 0,
+          index == 0,
+          subtitle: activityType,
+        ),
+      );
     }
-    
-    if (children.isEmpty) {
-      children.add(_logEntry('--:--', 'Waiting for first log entry...', false, false));
-    }
-    
+
     return Column(children: children);
   }
 
@@ -786,13 +944,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
             ),
           ),
           title: () {
-            final status = _bookingData['status'];
+            final status = _bookingData['status']?.toString().toLowerCase();
             final isSessionActive = (status == 'started' || status == 'active' || status == 'in_progress');
             if (!isSessionActive) {
-              return const Text(
-                'On the Way',
-                style: TextStyle(
-                  color: Colors.white,
+              final firstName = (_bookingData['caregiver_name']?.toString().trim().isNotEmpty == true
+                      ? _bookingData['caregiver_name'].toString().trim().split(RegExp(r'\s+')).first
+                      : 'Professional');
+              final label = status == 'arrived'
+                  ? '$firstName has arrived'
+                  : '$firstName is on the way';
+              return Text(
+                label,
+                style: const TextStyle(
+                  color: HestiaColors.primary,
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
@@ -817,7 +981,10 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) => ChatScreen(
+                          sessionId: _bookingData['session_id']?.toString() ?? '',
                           caregiverName: _bookingData['caregiver_name'] ?? 'Professional',
+                          actualStart: _bookingData['actual_start'] as DateTime?,
+                          durationHours: (_bookingData['duration_hours'] as num?)?.toDouble(),
                         ),
                       ),
                     );
@@ -892,351 +1059,495 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   Widget _buildOnTheWayView() {
-    return SingleChildScrollView(
+    final isArrived = _bookingData['status']?.toString().toLowerCase() == 'arrived';
+    final isClosed = ['completed', 'no_show', 'cancelled']
+        .contains(_bookingData['status']?.toString().toLowerCase());
+    final etaText = _routeDurationMin > 0 ? '$_routeDurationMin min' : '23 min';
+    final distanceText = _routeDistanceKm > 0
+        ? '${_routeDistanceKm.toStringAsFixed(1)} km'
+        : '2.4 km';
+    final sessionText = _formatMetricTime().replaceAll('\n', ' ');
+    final caregiverFirstName = (_bookingData['caregiver_name']?.toString().trim().isNotEmpty == true
+            ? _bookingData['caregiver_name'].toString().trim().split(RegExp(r'\s+')).first
+            : 'Professional');
+
+    return Stack(
       key: const ValueKey('on_the_way'),
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(
-            child: Text(
-              '${_bookingData['caregiver_name']?.toString().split(' ').first ?? 'Professional'} is on the way',
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-                color: Colors.white,
-                letterSpacing: 0.2,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Stylized custom map container
-          Container(
-            height: 240,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: HestiaColors.primary.withValues(alpha: 0.15),
-                width: 1.2,
-              ),
-            ),
-            child: Stack(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(22),
-                  child: _buildMapWidget(),
-                ),
-                // Hub label overlay
-                Positioned(
-                  top: 40,
-                  left: 30,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x1A000000),
-                          blurRadius: 6,
-                          offset: Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: const BoxDecoration(
-                            color: HestiaColors.primary,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        const Text(
-                          'Hub',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: HestiaColors.textDark,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                // ETA floating card overlay
-                Positioned(
-                  bottom: 16,
-                  left: 16,
-                  right: 16,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x14000000),
-                          blurRadius: 8,
-                          offset: Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text(
-                              'ARRIVING IN',
-                              style: TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                  color: HestiaColors.textMedium,
-                                  letterSpacing: 0.5),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              _routeDurationMin > 0 ? '$_routeDurationMin min' : '23 min',
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w900,
-                                color: HestiaColors.textDark,
-                              ),
-                            ),
-                          ],
-                        ),
-                        Text(
-                          _routeDistanceKm > 0
-                              ? '${_routeDistanceKm.toStringAsFixed(1)} km away'
-                              : '2.4 km away',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: HestiaColors.textMedium,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-          // Caregiver Profile Card
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: HestiaColors.primary.withValues(alpha: 0.15),
-                width: 1.2,
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF8C6239),
-                    shape: BoxShape.circle,
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    _getInitials(_bookingData['caregiver_name'] ?? 'P'),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _bookingData['caregiver_name'] ?? 'Professional',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: HestiaColors.textDark,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${_bookingData['title'] ?? 'Care'} Specialist',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: HestiaColors.textMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Row(
-                  mainAxisSize: MainAxisSize.min,
+      children: [
+        Positioned.fill(
+          child: Stack(
+            children: [
+              Positioned.fill(child: _buildMapWidget()),
+              Positioned(
+                top: 16,
+                left: 20,
+                right: 20,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.star, color: Colors.orange, size: 14),
-                    SizedBox(width: 4),
-                    Text(
-                      '5.0',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: HestiaColors.textDark,
+                    Center(
+                      child: Text(
+                        isArrived
+                            ? '$caregiverFirstName has arrived'
+                            : '$caregiverFirstName is on the way',
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          color: HestiaColors.primary,
+                        ),
                       ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        _mapChip(
+                          icon: Icons.route_rounded,
+                          label: isArrived ? 'At your address' : '$distanceText away',
+                        ),
+                        const SizedBox(width: 10),
+                        _mapChip(
+                          icon: Icons.schedule_rounded,
+                          label: isArrived ? 'Ready to verify' : 'ETA $etaText',
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          // Grid metrics block (Booked, Service, Hub)
-          Row(
-            children: [
-              _metricBlock('BOOKED', _formatMetricTime(), _formatMetricDuration()),
-              const SizedBox(width: 10),
-              _metricBlock('SERVICE', _formatMetricService(), 'Care'),
-              const SizedBox(width: 10),
-              _metricBlock('HUB', _formatMetricHub(), ''),
+              ),
             ],
           ),
-          const SizedBox(height: 20),
-          // Info banner updates
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFDF7F0),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: HestiaColors.primary.withValues(alpha: 0.15),
-                width: 1.2,
-              ),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  Icons.location_on_outlined,
-                  color: Color(0xFFC39365),
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Location updates every 15 seconds. You\'ll be notified when ${_bookingData['caregiver_name']?.toString().split(' ').first ?? 'the professional'} arrives.',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF78593E),
-                      height: 1.45,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          // Contact Dispatcher Button
-          GestureDetector(
-            onTap: () {},
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: HestiaColors.primary.withValues(alpha: 0.25),
-                  width: 1.5,
-                ),
-              ),
-              child: const Center(
-                child: Text(
-                  'Contact Hub Dispatch',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: HestiaColors.primary,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          GestureDetector(
-            onTap: () async {
-              final bookingId = _bookingData['booking_id'];
-              if (bookingId != null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Simulating professional arrival...'),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-                
-                await SupabaseService.requestSessionStart(bookingId.toString());
-                
-                // Immediately refresh status
-                final updated = await SupabaseService.getBookingStatus(bookingId.toString());
-                if (updated != null && mounted) {
-                  setState(() {
-                    _bookingData = updated;
+        ),
+        Positioned.fill(
+          child: NotificationListener<DraggableScrollableNotification>(
+              onNotification: (notification) {
+                final expandedNow = notification.extent > 0.44;
+                if (expandedNow != _isOnTheWaySheetExpanded) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() {
+                        _isOnTheWaySheetExpanded = expandedNow;
+                      });
+                    }
                   });
-                  _checkArrivalRequest(updated);
                 }
-              }
-            },
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF2ECC71), Color(0xFF27AE60)],
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x262ECC71),
-                    blurRadius: 8,
-                    offset: Offset(0, 4),
-                  ),
+                return false;
+              },
+              child: DraggableScrollableSheet(
+                controller: _onTheWaySheetController,
+                expand: true,
+                initialChildSize: 0.28,
+                minChildSize: 0.28,
+                maxChildSize: isArrived ? 0.82 : 0.72,
+                snap: true,
+                snapSizes: <double>[
+                  0.28,
+                  0.46,
+                  if (isArrived) 0.82 else 0.72,
                 ],
-              ),
-              child: const Center(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.play_arrow_rounded, color: Colors.white),
-                    SizedBox(width: 8),
-                    Text(
-                      'Simulate Professional Arrival',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
+                builder: (context, scrollController) {
+                  return Container(
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFF9F6F2),
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x26000000),
+                          blurRadius: 18,
+                          offset: Offset(0, -6),
+                        ),
+                      ],
+                    ),
+                    child: SafeArea(
+                      top: false,
+                      child: CustomScrollView(
+                        controller: scrollController,
+                        physics: const BouncingScrollPhysics(),
+                        slivers: [
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Center(
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () {
+                                      final currentSize =
+                                          _onTheWaySheetController.isAttached
+                                              ? _onTheWaySheetController.size
+                                              : 0.28;
+                                      final maxSize = isArrived ? 0.82 : 0.72;
+                                      final targetSize = currentSize < 0.40
+                                          ? 0.46
+                                          : (currentSize < (maxSize - 0.04) ? maxSize : 0.28);
+                                      _onTheWaySheetController.animateTo(
+                                        targetSize,
+                                        duration: const Duration(milliseconds: 280),
+                                        curve: Curves.easeOutCubic,
+                                      );
+                                    },
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 6),
+                                      child: Container(
+                                        width: 52,
+                                        height: 5,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFD8C7B9),
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _sheetSummaryMetric('ETA', etaText),
+                                    ),
+                                    _sheetDivider(),
+                                    Expanded(
+                                      child: _sheetSummaryMetric('DISTANCE', distanceText),
+                                    ),
+                                    _sheetDivider(),
+                                    Expanded(
+                                      child: _sheetSummaryMetric('SESSION', sessionText),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  isArrived
+                                      ? 'Professional is at the booking address. Expand to verify arrival and see full details.'
+                                      : 'Route shown: ${_formatRouteSourceLabel()} to booking address.',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: HestiaColors.textMedium,
+                                    height: 1.35,
+                                  ),
+                                ),
+                                AnimatedCrossFade(
+                                  duration: const Duration(milliseconds: 220),
+                                  firstChild: const SizedBox(height: 10),
+                                  secondChild: const SizedBox(height: 18),
+                                  crossFadeState: _isOnTheWaySheetExpanded
+                                      ? CrossFadeState.showSecond
+                                      : CrossFadeState.showFirst,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        SliverOpacity(
+                          opacity: _isOnTheWaySheetExpanded ? 1 : 0,
+                          sliver: SliverIgnorePointer(
+                            ignoring: !_isOnTheWaySheetExpanded,
+                            sliver: SliverToBoxAdapter(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: HestiaColors.primary.withValues(alpha: 0.12),
+                                          width: 1.2,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 52,
+                                            height: 52,
+                                            decoration: const BoxDecoration(
+                                              color: Color(0xFF8C6239),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: Text(
+                                              _getInitials(_bookingData['caregiver_name'] ?? 'P'),
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 14),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  _bookingData['caregiver_name'] ?? 'Professional',
+                                                  style: const TextStyle(
+                                                    fontSize: 18,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: HestiaColors.textDark,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 3),
+                                                Text(
+                                                  '${_bookingData['title'] ?? 'Care'} Specialist',
+                                                  style: const TextStyle(
+                                                    fontSize: 13,
+                                                    color: HestiaColors.textMedium,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          Column(
+                                            crossAxisAlignment: CrossAxisAlignment.end,
+                                            children: [
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(Icons.star, color: Colors.orange, size: 16),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    _formatProfessionalRating(),
+                                                    style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: HestiaColors.textDark,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              if (_formatProfessionalSessions().isNotEmpty) ...[
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  _formatProfessionalSessions(),
+                                                  style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: HestiaColors.textLight,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 14),
+                                    Row(
+                                      children: [
+                                        _metricBlock('BOOKED', _formatMetricTime(), _formatMetricDuration()),
+                                        const SizedBox(width: 10),
+                                        _metricBlock('SERVICE', _formatMetricService(), 'Care'),
+                                        const SizedBox(width: 10),
+                                        _metricBlock('HUB', _formatMetricHub(), ''),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: HestiaColors.primary.withValues(alpha: 0.12),
+                                          width: 1.2,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Icon(
+                                            Icons.location_on_outlined,
+                                            color: Color(0xFFC39365),
+                                            size: 20,
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Text(
+                                              isArrived
+                                                  ? 'Your professional has confirmed arrival. Please verify the arrival code to start the session.'
+                                                  : _shouldRouteFromProfessionalLiveLocation()
+                                                      ? 'Live route, distance and ETA are calculated from the professional\'s current location updates.'
+                                                      : 'Route, distance and ETA are currently calculated from the assigned hub to your booking address until the professional begins transit.',
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Color(0xFF78593E),
+                                                height: 1.45,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFFFBF7),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                          color: HestiaColors.primary.withValues(alpha: 0.12),
+                                          width: 1.2,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text(
+                                            'LIVE ROUTE',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.bold,
+                                              color: HestiaColors.textLight,
+                                              letterSpacing: 0.8,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          _routeEndpointRow(
+                                            icon: Icons.directions_car_rounded,
+                                            label: 'From',
+                                            value: _formatRouteSourceLabel(),
+                                            iconColor: HestiaColors.primary,
+                                          ),
+                                          Padding(
+                                            padding: const EdgeInsets.only(left: 10),
+                                            child: Container(
+                                              width: 1.5,
+                                              height: 18,
+                                              color: HestiaColors.primary.withValues(alpha: 0.22),
+                                            ),
+                                          ),
+                                          _routeEndpointRow(
+                                            icon: Icons.location_on_rounded,
+                                            label: 'To',
+                                            value: _formatRouteDestinationLabel(),
+                                            iconColor: Colors.redAccent,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (isArrived) ...[
+                                      const SizedBox(height: 18),
+                                      _buildVerificationCard(),
+                                      if (kDebugMode) ...[
+                                        const SizedBox(height: 14),
+                                        GestureDetector(
+                                          onTap: () async {
+                                            final bookingId = _bookingData['booking_id'];
+                                            if (bookingId != null) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('Simulating professional arrival...'),
+                                                  duration: Duration(seconds: 1),
+                                                ),
+                                              );
+                                              await SupabaseService.requestSessionStart(bookingId.toString());
+                                              final updated = await SupabaseService.getBookingStatus(bookingId.toString());
+                                              if (updated != null && mounted) {
+                                                setState(() {
+                                                  _bookingData = updated;
+                                                });
+                                              }
+                                            }
+                                          },
+                                          child: Container(
+                                            width: double.infinity,
+                                            padding: const EdgeInsets.symmetric(vertical: 14),
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey.shade800,
+                                              borderRadius: BorderRadius.circular(16),
+                                            ),
+                                            child: const Center(
+                                              child: Text(
+                                                'Simulate Arrival (Debug Mode)',
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ] else if (!isClosed) ...[
+                                      const SizedBox(height: 18),
+                                      if (kDebugMode) ...[
+                                        GestureDetector(
+                                          onTap: () async {
+                                            final bookingId = _bookingData['booking_id'];
+                                            if (bookingId != null) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text('Simulating professional arrival...'),
+                                                  duration: Duration(seconds: 1),
+                                                ),
+                                              );
+                                              await SupabaseService.requestSessionStart(bookingId.toString());
+                                              final updated = await SupabaseService.getBookingStatus(bookingId.toString());
+                                              if (updated != null && mounted) {
+                                                setState(() {
+                                                  _bookingData = updated;
+                                                });
+                                              }
+                                            }
+                                          },
+                                          child: Container(
+                                            width: double.infinity,
+                                            padding: const EdgeInsets.symmetric(vertical: 14),
+                                            decoration: BoxDecoration(
+                                              gradient: const LinearGradient(
+                                                colors: [Color(0xFF2ECC71), Color(0xFF27AE60)],
+                                              ),
+                                              borderRadius: BorderRadius.circular(16),
+                                              boxShadow: const [
+                                                BoxShadow(
+                                                  color: Color(0x262ECC71),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 4),
+                                                ),
+                                              ],
+                                            ),
+                                            child: const Center(
+                                              child: Row(
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  Icon(Icons.play_arrow_rounded, color: Colors.white),
+                                                  SizedBox(width: 8),
+                                                  Text(
+                                                    'Simulate Professional Arrival',
+                                                    style: TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.white,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1505,15 +1816,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 ),
                 elevation: 0,
               ),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => SessionCompleteScreen(
-                      bookingData: _bookingData,
-                    ),
-                  ),
-                );
-              },
+              onPressed: _showEndSessionWarningDialog,
               child: const Text(
                 'End Session',
                 style: TextStyle(
@@ -1526,6 +1829,412 @@ class _TrackingScreenState extends State<TrackingScreen> {
         ],
       ),
     );
+  }
+
+  void _showEndSessionWarningDialog() {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: const Color(0xFFFAF6F0),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFFC0392B),
+                size: 28,
+              ),
+              SizedBox(width: 10),
+              Text(
+                'End Session?',
+                style: TextStyle(
+                  color: HestiaColors.textDark,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Are you sure you want to end this session? This action cannot be undone.',
+            style: TextStyle(
+              color: HestiaColors.textDark,
+              fontSize: 14,
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop();
+                    },
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: HestiaColors.primary.withValues(alpha: 0.3)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: HestiaColors.textMedium,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      if (_isEndingSession) return;
+                      Navigator.of(dialogContext).pop(); // close warning dialog
+                      
+                      final sessionId = _bookingData['session_id'];
+                      if (sessionId != null) {
+                        if (mounted) {
+                          setState(() {
+                            _isEndingSession = true;
+                          });
+                        }
+                        bool loadingShown = false;
+                        final rootNavigator = Navigator.of(context, rootNavigator: true);
+                        // Show loading indicator
+                        showDialog(
+                          context: context,
+                          useRootNavigator: true,
+                          barrierDismissible: false,
+                          builder: (_) => const Center(
+                            child: CircularProgressIndicator(color: HestiaColors.primary),
+                          ),
+                        );
+                        loadingShown = true;
+
+                        try {
+                          await SupabaseService.endSessionByClient(
+                            sessionId: sessionId.toString(),
+                          ).timeout(const Duration(seconds: 20));
+                          
+                          // Refresh status to get actual_end etc.
+                          final updated = await SupabaseService.getBookingStatus(
+                            _bookingData['booking_id'].toString(),
+                          ).timeout(const Duration(seconds: 10), onTimeout: () => null);
+
+                          if (mounted) {
+                            if (loadingShown && rootNavigator.canPop()) {
+                              rootNavigator.pop(); // dismiss loading indicator
+                            }
+                            
+                            // Navigate to SessionCompleteScreen
+                            navigator.pushReplacement(
+                              MaterialPageRoute(
+                                builder: (context) => SessionCompleteScreen(
+                                  bookingData: updated ?? _bookingData,
+                                ),
+                              ),
+                            );
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            if (loadingShown && rootNavigator.canPop()) {
+                              rootNavigator.pop(); // dismiss loading indicator
+                            }
+                            messenger.showSnackBar(
+                              SnackBar(content: Text('Failed to end session: $e')),
+                            );
+                          }
+                        } finally {
+                          if (mounted) {
+                            setState(() {
+                              _isEndingSession = false;
+                            });
+                          }
+                        }
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFC0392B),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                    child: const Text(
+                      'End Session',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _startLocationTracking() {
+    _locationTimer?.cancel();
+    _locationTimer = Timer.periodic(const Duration(seconds: 15), (timer) async {
+      final sessionId = _bookingData['session_id'];
+      if (sessionId != null && mounted) {
+        final latestLoc = await SupabaseService.getLatestProfessionalLocation(sessionId.toString());
+        if (latestLoc != null && mounted) {
+          setState(() {
+            _professionalLocation = LatLng(latestLoc['latitude']!, latestLoc['longitude']!);
+          });
+          // Refresh route and coordinates starting from professional's current location
+          await _loadRouteAndCoordinates();
+        }
+      }
+    });
+  }
+
+  void _initRealtimeSubscription() {
+    final bookingId = _bookingData['booking_id'];
+    if (bookingId == null) return;
+
+    _realtimeChannel = SupabaseService.client
+        .channel('client_session_$bookingId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'sessions',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'booking_id',
+            value: bookingId.toString(),
+          ),
+          callback: (payload) {
+            final newStatus = payload.newRecord['status']?.toString();
+            final arrivalCode = payload.newRecord['arrival_code']?.toString();
+            final startTime = payload.newRecord['start_time']?.toString();
+            if (newStatus != null && mounted) {
+              final previousRouteMode = _shouldRouteFromProfessionalLiveLocation();
+              setState(() {
+                _bookingData['status'] = newStatus;
+                if (arrivalCode != null) {
+                  _bookingData['arrival_code'] = arrivalCode;
+                }
+                if (startTime != null) {
+                  _bookingData['actual_start'] = DateTime.parse(startTime);
+                }
+                final isSessionActive = (newStatus == 'started' || newStatus == 'active' || newStatus == 'in_progress');
+                if (isSessionActive) {
+                  _isOnTheWayView = false;
+                  _startStopwatch();
+                  _statusTimer?.cancel();
+                } else {
+                  _isOnTheWayView = true;
+                }
+              });
+              if (previousRouteMode !=
+                  _shouldRouteFromProfessionalLiveLocation()) {
+                _loadRouteAndCoordinates();
+              }
+            }
+          },
+        );
+    _realtimeChannel?.subscribe();
+  }
+
+  Widget _buildVerificationCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: HestiaColors.primary.withValues(alpha: 0.15),
+          width: 1.2,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.verified_user_rounded,
+                color: HestiaColors.primary,
+                size: 24,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Verify Arrival',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: HestiaColors.textDark,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Ask your professional for the verification code shown on their app.',
+            style: TextStyle(
+              fontSize: 13,
+              color: HestiaColors.textMedium,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 20),
+          // 6-character text field
+          TextField(
+            controller: _codeController,
+            focusNode: _codeFocusNode,
+            maxLength: 6,
+            textCapitalization: TextCapitalization.characters,
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+              color: HestiaColors.primary,
+              letterSpacing: 8.0,
+            ),
+            decoration: InputDecoration(
+              hintText: 'CODE12',
+              hintStyle: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade300,
+                letterSpacing: 8.0,
+              ),
+              counterText: '',
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              filled: true,
+              fillColor: const Color(0xFFFAF6F0),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(color: HestiaColors.primary.withValues(alpha: 0.2)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(color: HestiaColors.primary.withValues(alpha: 0.2)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: const BorderSide(color: HestiaColors.primary, width: 2),
+              ),
+            ),
+            onChanged: (val) {
+              setState(() {
+                _enteredCode = val;
+                _verificationError = null;
+              });
+            },
+          ),
+          if (_verificationError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _verificationError!,
+              style: const TextStyle(
+                color: Colors.redAccent,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: (_enteredCode.trim().length == 6 && !_isStartingSession)
+                  ? _handleStartSession
+                  : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: HestiaColors.primary,
+                disabledBackgroundColor: HestiaColors.primary.withValues(alpha: 0.4),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              child: _isStartingSession
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Text(
+                      'Start Session',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleStartSession() async {
+    final sessionId = _bookingData['session_id'];
+    if (sessionId == null) {
+      setState(() {
+        _verificationError = 'Session not found';
+      });
+      return;
+    }
+
+    setState(() {
+      _isStartingSession = true;
+      _verificationError = null;
+    });
+
+    try {
+      await SupabaseService.startSessionByClient(
+        sessionId: sessionId.toString(),
+        arrivalCode: _enteredCode,
+      );
+
+      // Immediately refresh status
+      final updated = await SupabaseService.getBookingStatus(widget.bookingData['booking_id'].toString());
+      if (updated != null && mounted) {
+        setState(() {
+          _bookingData = updated;
+          final status = _bookingData['status'];
+          final isSessionActive = (status == 'started' || status == 'active' || status == 'in_progress');
+          if (isSessionActive) {
+            _isOnTheWayView = false;
+            _startStopwatch();
+            _statusTimer?.cancel();
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _verificationError = "Code doesn't match. Ask your professional to read it again.";
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isStartingSession = false;
+        });
+      }
+    }
   }
 
   Widget _metricBlock(String label, String value, String sub) {
@@ -1579,7 +2288,88 @@ class _TrackingScreenState extends State<TrackingScreen> {
     );
   }
 
-  Widget _logEntry(String time, String message, bool isGreen, bool showNewBadge) {
+  Widget _sheetSummaryMetric(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              color: HestiaColors.textLight,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+              color: HestiaColors.textDark,
+              height: 1.15,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sheetDivider() {
+    return Container(
+      width: 1,
+      height: 40,
+      color: HestiaColors.primary.withValues(alpha: 0.12),
+    );
+  }
+
+  Widget _routeEndpointRow({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color iconColor,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: iconColor),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: HestiaColors.textLight,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: HestiaColors.textDark,
+                  height: 1.35,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _logEntry(String time, String message, bool isGreen, bool showNewBadge, {String subtitle = ''}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16.0),
       child: Row(
@@ -1605,34 +2395,49 @@ class _TrackingScreenState extends State<TrackingScreen> {
           ),
           const SizedBox(width: 14),
           Expanded(
-            child: Row(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Text(
-                    message,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: HestiaColors.textDark,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-                if (showNewBadge) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE8F5E9),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text(
-                      'New',
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF2E7D32),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        message,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: HestiaColors.textDark,
+                          height: 1.35,
+                        ),
                       ),
+                    ),
+                    if (showNewBadge) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'New',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2E7D32),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                if (subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: HestiaColors.textLight,
                     ),
                   ),
                 ],

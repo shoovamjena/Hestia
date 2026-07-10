@@ -4,6 +4,8 @@ import 'config/supabase_config.dart';
 import 'screens/splash_screen.dart';
 import 'theme/colors.dart';
 
+import 'services/notifications_state.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
@@ -12,10 +14,23 @@ void main() async {
     publishableKey: SupabaseConfig.anonKey,
   );
 
-  // Debug: Log auth state changes
+  // Initialize local phone push notifications configurations
+  await NotificationsState.instance.initLocalNotifications();
+
+  // If a persistent session exists on launch, register real-time updates immediately
+  if (Supabase.instance.client.auth.currentSession != null) {
+    await NotificationsState.instance.initialize();
+  }
+
+  // Debug: Log auth state changes and manage realtime notification subscriptions
   Supabase.instance.client.auth.onAuthStateChange.listen((data) {
     // ignore: avoid_print
     print('DEBUG AUTH EVENT: ${data.event}, Session User: ${data.session?.user.email ?? data.session?.user.phone ?? 'None'}');
+    if (data.session != null) {
+      NotificationsState.instance.initialize();
+    } else {
+      NotificationsState.instance.disposeSubscription();
+    }
   });
 
   runApp(const HestiaApp());

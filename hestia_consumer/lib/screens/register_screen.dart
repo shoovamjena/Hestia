@@ -136,6 +136,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 await SupabaseService.createProfile(
                   id: response.user!.id,
                   fullName: _nameController.text.trim(),
+                  email: _emailController.text.trim(),
                   phone: phone,
                 );
               } catch (e) {

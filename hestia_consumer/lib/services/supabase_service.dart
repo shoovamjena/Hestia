@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -87,6 +88,24 @@ class SupabaseService {
       return metaPhone;
     }
     
+    return '';
+  }
+
+  /// Safely get the email for the current user from auth or metadata.
+  static String get currentUserEmail {
+    final user = currentUser;
+    if (user == null) return '';
+
+    final email = user.email;
+    if (email != null && email.isNotEmpty) {
+      return email;
+    }
+
+    final metaEmail = user.userMetadata?['email']?.toString();
+    if (metaEmail != null && metaEmail.isNotEmpty) {
+      return metaEmail;
+    }
+
     return '';
   }
 
@@ -199,15 +218,34 @@ class SupabaseService {
     }
   }
 
-  /// Check if the user's profile is complete by checking if their user_id is in the household_members table.
+  /// Check if the user's profile is complete using relational and legacy sources.
   static Future<bool> isProfileComplete(String userId) async {
     try {
+      final userRow = await client
+          .from('users')
+          .select('onboarding_complete')
+          .eq('id', userId)
+          .maybeSingle();
+      if (userRow?['onboarding_complete'] == true) {
+        return true;
+      }
+
       final memberRows = await client
           .from('household_members')
           .select('id')
           .eq('user_id', userId)
           .limit(1);
-      return memberRows.isNotEmpty;
+      if (memberRows.isNotEmpty) {
+        return true;
+      }
+
+      final legacyProfile = await downloadProfileJson(userId);
+      final legacyMembers = legacyProfile?['household_members'];
+      if (legacyMembers is List && legacyMembers.isNotEmpty) {
+        return true;
+      }
+
+      return false;
     } catch (e) {
       // ignore: avoid_print
       print('Warning: isProfileComplete check failed: $e');
@@ -220,9 +258,13 @@ class SupabaseService {
   static Future<void> createProfile({
     required String id,
     required String fullName,
+    String? email,
     String? phone,
   }) async {
     try {
+      final resolvedEmail = (email ?? currentUserEmail).trim();
+      final String? dbEmail = resolvedEmail.isEmpty ? null : resolvedEmail;
+
       String? dbPhone = phone;
       if (dbPhone != null && dbPhone.trim().isEmpty) {
         dbPhone = null;
@@ -231,6 +273,7 @@ class SupabaseService {
       await client.from('users').upsert({
         'id': id,
         'full_name': fullName,
+        'email': dbEmail,
         'phone': dbPhone,
         'updated_at': DateTime.now().toIso8601String(),
       });
@@ -286,6 +329,9 @@ class SupabaseService {
   }) async {
     final user = currentUser;
     String cleanPhone = phone.trim().replaceAll(' ', '').replaceAll('+', '');
+    if (cleanPhone.length == 10) {
+      cleanPhone = '91$cleanPhone';
+    }
     
     if (user != null) {
       // SCENARIO A: User is already logged in (verifying phone from profile screen)
@@ -339,10 +385,21 @@ class SupabaseService {
           final password = 'bypass_${cleanPhone}_password';
           try {
             // Attempt to sign in
-            return await client.auth.signInWithPassword(
+            final response = await client.auth.signInWithPassword(
               email: email,
               password: password,
             );
+            final user = response.user;
+            if (user != null) {
+              try {
+                await createProfile(
+                  id: user.id,
+                  fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+                  phone: phone,
+                );
+              } catch (_) {}
+            }
+            return response;
           } catch (_) {
             // If sign in fails, sign up the bypass user
             final response = await client.auth.signUp(
@@ -352,8 +409,19 @@ class SupabaseService {
                 'phone': phone,
                 'phone_verified': true,
                 'user_type': 'consumer',
+                if (pendingSignUpName != null) 'full_name': pendingSignUpName,
               },
             );
+            final user = response.user;
+            if (user != null) {
+              try {
+                await createProfile(
+                  id: user.id,
+                  fullName: pendingSignUpName ?? 'User',
+                  phone: phone,
+                );
+              } catch (_) {}
+            }
             return response;
           }
         } else {
@@ -395,6 +463,7 @@ class SupabaseService {
             await createProfile(
               id: user.id,
               fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+                  email: user.email ?? email,
               phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
             );
             await client.from('users').update({
@@ -420,6 +489,7 @@ class SupabaseService {
               await createProfile(
                 id: user.id,
                 fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+                email: user.email ?? email,
                 phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
               );
               await client.from('users').update({
@@ -446,6 +516,7 @@ class SupabaseService {
               await createProfile(
                 id: user.id,
                 fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+                email: email,
                 phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
               );
               await client.from('users').update({
@@ -470,6 +541,7 @@ class SupabaseService {
           await createProfile(
             id: user.id,
             fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+            email: user.email ?? email,
             phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
           );
           await client.from('users').update({
@@ -756,8 +828,12 @@ class SupabaseService {
 
       final profile = {
         'name': userResponse['full_name'],
-        'email': userResponse['email'],
-        'phone': userResponse['phone'],
+        'email': (userResponse['email'] as String?)?.isNotEmpty == true
+            ? userResponse['email']
+            : currentUserEmail,
+        'phone': (userResponse['phone'] as String?)?.isNotEmpty == true
+            ? userResponse['phone']
+            : currentUserPhone,
         'phone_verified': isPhoneVerified(),
       };
 
@@ -1008,6 +1084,7 @@ class SupabaseService {
       'scheduled_date': selectedDate.toIso8601String().substring(0, 10),
       'scheduled_time': selectedTime,
       'duration_hours': durationHours,
+      'user_id': userId,
       'notes': jsonEncode(metadata),
     }).select('id').single();
 
@@ -1024,6 +1101,15 @@ class SupabaseService {
         }).select('id').single();
 
         final sessionId = sessionRes['id'] as String;
+
+        // Create a pending invoice for the booking/session.
+        await client.from('invoices').insert({
+          'session_id': sessionId,
+          'user_id': userId,
+          'amount': totalAmount,
+          'status': 'pending',
+          'payment_method': paymentId == null || paymentId.isEmpty ? 'unpaid' : 'online',
+        });
 
         // Insert dummy locations for tracking
         await client.from('professional_locations').insert([
@@ -1083,7 +1169,9 @@ class SupabaseService {
     try {
       final responseList = await client
           .from('bookings')
-          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name), hubs(name, address)');
+          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions), hubs(name, address)')
+          .eq('user_id', userId)
+          .inFilter('status', ['pending', 'confirmed', 'active', 'in_progress']);
 
       final eligible = <Map<String, dynamic>>[];
       for (var row in responseList) {
@@ -1091,11 +1179,10 @@ class SupabaseService {
         if (notesStr == null) continue;
         try {
           final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
-          if (metadata['user_id'] == userId) {
-            final status = row['status'] as String? ?? 'pending';
-            if (['pending', 'confirmed', 'active'].contains(status)) {
-              eligible.add(row);
-            }
+          final status = row['status'] as String? ?? 'pending';
+          if (metadata['user_id'] == userId &&
+              ['pending', 'confirmed', 'active', 'in_progress'].contains(status)) {
+            eligible.add(row);
           }
         } catch (_) {}
       }
@@ -1139,8 +1226,15 @@ class SupabaseService {
       final status = response['status'] as String? ?? 'pending';
       
       String caregiverName = 'Professional';
+      double professionalRating = 0.0;
+      int professionalTotalSessions = 0;
       if (response['professionals'] != null) {
-        caregiverName = (response['professionals'] as Map<String, dynamic>)['full_name'] as String? ?? caregiverName;
+        final professional = response['professionals'] as Map<String, dynamic>;
+        caregiverName = professional['full_name'] as String? ?? caregiverName;
+        professionalRating =
+            double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
+        professionalTotalSessions =
+            int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
       }
 
       String hubName = '';
@@ -1170,49 +1264,54 @@ class SupabaseService {
       }
 
        String activeStatus = status;
-      String? sessionId;
-      DateTime? actualStart;
-      DateTime? actualEnd;
-      try {
-        final sessionRes = await client
-            .from('sessions')
-            .select('id, status, start_time, end_time')
-            .eq('booking_id', bookingId)
-            .limit(1)
-            .maybeSingle();
-        if (sessionRes != null) {
-          activeStatus = sessionRes['status'] as String;
-          sessionId = sessionRes['id'] as String;
-          final startTimeStr = sessionRes['start_time'] as String?;
-          if (startTimeStr != null) {
-            actualStart = DateTime.parse(startTimeStr);
-          }
-          final endTimeStr = sessionRes['end_time'] as String?;
-          if (endTimeStr != null) {
-            actualEnd = DateTime.parse(endTimeStr);
-          }
-        }
-      } catch (e) {
-        // ignore
-      }
+       String? sessionId;
+       DateTime? actualStart;
+       DateTime? actualEnd;
+       String? arrivalCode;
+       try {
+         final sessionRes = await client
+             .from('sessions')
+             .select('id, status, start_time, end_time, arrival_code')
+             .eq('booking_id', bookingId)
+             .limit(1)
+             .maybeSingle();
+         if (sessionRes != null) {
+           activeStatus = sessionRes['status'] as String;
+           sessionId = sessionRes['id'] as String;
+           arrivalCode = sessionRes['arrival_code']?.toString();
+           final startTimeStr = sessionRes['start_time'] as String?;
+           if (startTimeStr != null) {
+             actualStart = DateTime.parse(startTimeStr);
+           }
+           final endTimeStr = sessionRes['end_time'] as String?;
+           if (endTimeStr != null) {
+             actualEnd = DateTime.parse(endTimeStr);
+           }
+         }
+       } catch (e) {
+         // ignore
+       }
 
-      return {
-        'booking_id': bookingId,
-        'session_id': sessionId,
-        'title': serviceType,
-        'scheduled_start': scheduledStart,
-        'actual_start': actualStart,
-        'actual_end': actualEnd,
-        'amount': totalAmount,
-        'status': activeStatus,
-        'caregiver_name': caregiverName,
-        'hub_name': hubName,
-        'hub_address': hubAddress,
-        'user_address': userAddress,
-        'arrival_requested': activeStatus == 'arrived',
-        'care_notes': careNotes,
-        'duration_hours': (response['duration_hours'] as num?)?.toDouble() ?? 2.0,
-      };
+       return {
+         'booking_id': bookingId,
+         'session_id': sessionId,
+         'title': serviceType,
+         'scheduled_start': scheduledStart,
+         'actual_start': actualStart,
+         'actual_end': actualEnd,
+         'amount': totalAmount,
+         'status': activeStatus,
+         'caregiver_name': caregiverName,
+         'professional_rating': professionalRating,
+         'professional_total_sessions': professionalTotalSessions,
+         'hub_name': hubName,
+         'hub_address': hubAddress,
+         'user_address': userAddress,
+         'arrival_requested': activeStatus == 'arrived',
+         'arrival_code': arrivalCode,
+         'care_notes': careNotes,
+         'duration_hours': (response['duration_hours'] as num?)?.toDouble() ?? 2.0,
+       };
     } catch (e) {
       // ignore: avoid_print
       print('Error in getActiveBooking: $e');
@@ -1220,13 +1319,14 @@ class SupabaseService {
     }
   }
 
-  /// Request session start, updating status to 'arrived'
+  /// Request session start, updating status to 'arrived' and setting a mock arrival_code
   static Future<void> requestSessionStart(String bookingId) async {
     try {
       await client
           .from('sessions')
           .update({
             'status': 'arrived',
+            'arrival_code': 'TEST12',
           })
           .eq('booking_id', bookingId);
     } catch (e) {
@@ -1235,12 +1335,265 @@ class SupabaseService {
     }
   }
 
+  /// Retrieve a session by its ID
+  static Future<Map<String, dynamic>?> getSessionById(String sessionId) async {
+    try {
+      return await client
+          .from('sessions')
+          .select()
+          .eq('id', sessionId)
+          .maybeSingle();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in getSessionById: $e');
+      return null;
+    }
+  }
+
+  /// Verification flow for client to verify arrival code and start the session
+  static Future<void> startSessionByClient({
+    required String sessionId,
+    required String arrivalCode,
+  }) async {
+    final session = await getSessionById(sessionId);
+    if (session == null) throw Exception('Session not found');
+    if ((session['status'] ?? '').toString().toLowerCase() != 'arrived') {
+      throw Exception('Session cannot be started right now');
+    }
+    final stored = session['arrival_code']?.toString().toUpperCase();
+    final provided = arrivalCode.trim().toUpperCase();
+    if (stored == null || stored != provided) {
+      throw Exception('Invalid verification code');
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    await client.from('sessions').update({
+      'status': 'active',
+      'start_time': now,
+      'client_verified_at': now,
+    }).eq('id', sessionId);
+    
+    final bookingId = session['booking_id']?.toString();
+    if (bookingId != null) {
+      await client.from('bookings').update({'status': 'in_progress'}).eq('id', bookingId);
+    }
+  }
+
+  /// End the session by client
+  static Future<void> endSessionByClient({
+    required String sessionId,
+  }) async {
+    final session = await getSessionById(sessionId);
+    if (session == null) throw Exception('Session not found');
+    
+    final now = DateTime.now().toUtc().toIso8601String();
+    final updatedSession = await client.from('sessions').update({
+      'status': 'completed',
+      'end_time': now,
+    }).eq('id', sessionId).select('id, booking_id').maybeSingle();
+    if (updatedSession == null) {
+      throw Exception('Unable to complete session. Please try again.');
+    }
+    
+    final bookingId =
+        updatedSession['booking_id']?.toString() ?? session['booking_id']?.toString();
+    if (bookingId != null) {
+      final updatedBooking = await client
+          .from('bookings')
+          .update({'status': 'completed'})
+          .eq('id', bookingId)
+          .select('id')
+          .maybeSingle();
+      if (updatedBooking == null) {
+        throw Exception('Session completed, but booking status update failed.');
+      }
+    }
+  }
+
+  static Map<String, double>? _parseProfessionalCoordinates(dynamic rawCoordinates) {
+    if (rawCoordinates is Map<String, dynamic>) {
+      final list = rawCoordinates['coordinates'];
+      if (list is List && list.length >= 2) {
+        final lng = (list[0] as num?)?.toDouble();
+        final lat = (list[1] as num?)?.toDouble();
+        if (lat != null && lng != null) {
+          return {
+            'latitude': lat,
+            'longitude': lng,
+          };
+        }
+      }
+    }
+    if (rawCoordinates is List && rawCoordinates.length >= 2) {
+      final lng = (rawCoordinates[0] as num?)?.toDouble();
+      final lat = (rawCoordinates[1] as num?)?.toDouble();
+      if (lat != null && lng != null) {
+        return {
+          'latitude': lat,
+          'longitude': lng,
+        };
+      }
+    }
+    return null;
+  }
+
+  /// Retrieve the latest recorded location coordinates for a professional in a session.
+  /// Poll this from the UI every 15 seconds for live tracking.
+  static Future<Map<String, double>?> getLatestProfessionalLocation(
+    String sessionId, {
+    String? professionalId,
+  }) async {
+    try {
+      var query = client
+          .from('professional_locations')
+          .select('coordinates, professional_id, recorded_at')
+          .eq('session_id', sessionId);
+      if (professionalId != null && professionalId.isNotEmpty) {
+        query = query.eq('professional_id', professionalId);
+      }
+      final response = await query
+          .order('recorded_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (response != null && response['coordinates'] != null) {
+        return _parseProfessionalCoordinates(response['coordinates']);
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in getLatestProfessionalLocation: $e');
+    }
+    return null;
+  }
+
+  /// Fetch user notifications for the logged-in client
+  static Future<List<Map<String, dynamic>>> getUserNotifications({int limit = 50}) async {
+    try {
+      final user = currentUser;
+      if (user == null) return [];
+      
+      final response = await client
+          .from('user_notifications')
+          .select()
+          .eq('user_id', user.id)
+          .order('created_at', ascending: false)
+          .limit(limit);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in getUserNotifications: $e');
+      return [];
+    }
+  }
+
+  /// Fetch broadcast notifications relevant to the current consumer user.
+  static Future<List<Map<String, dynamic>>> getBroadcastNotifications({int limit = 50}) async {
+    try {
+      final user = currentUser;
+      if (user == null) return [];
+
+      final hubIds = await getCurrentUserHubIds(user.id);
+      final response = await client
+          .from('notifications')
+          .select()
+          .eq('target_app', 'consumer')
+          .eq('is_active', true)
+          .order('created_at', ascending: false)
+          .limit(limit);
+
+      final rows = List<Map<String, dynamic>>.from(response);
+      return rows.where((row) {
+        final audienceType = row['audience_type']?.toString() ?? 'all';
+        final audienceId = row['audience_id']?.toString();
+        if (audienceType == 'all') return true;
+        if (audienceType == 'user') return audienceId == user.id;
+        if (audienceType == 'hub') return audienceId != null && hubIds.contains(audienceId);
+        return false;
+      }).toList();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in getBroadcastNotifications: $e');
+      return [];
+    }
+  }
+
+  /// Fetch all hub ids associated with the user's saved addresses.
+  static Future<Set<String>> getCurrentUserHubIds(String userId) async {
+    try {
+      final response = await client
+          .from('addresses')
+          .select('hub_id')
+          .eq('user_id', userId);
+
+      return List<Map<String, dynamic>>.from(response)
+          .map((row) => row['hub_id']?.toString())
+          .whereType<String>()
+          .where((id) => id.isNotEmpty)
+          .toSet();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in getCurrentUserHubIds: $e');
+      return <String>{};
+    }
+  }
+
+  /// Fetch booking ids for the current user, used by realtime arrival alerts.
+  static Future<Set<String>> getUserBookingIds(String userId) async {
+    try {
+      final response = await client
+          .from('bookings')
+          .select('id')
+          .eq('user_id', userId);
+
+      return List<Map<String, dynamic>>.from(response)
+          .map((row) => row['id']?.toString())
+          .whereType<String>()
+          .where((id) => id.isNotEmpty)
+          .toSet();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in getUserBookingIds: $e');
+      return <String>{};
+    }
+  }
+
+  /// Mark a specific notification as read
+  static Future<void> markUserNotificationRead(String id) async {
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      await client
+          .from('user_notifications')
+          .update({'read_at': now})
+          .eq('id', id);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in markUserNotificationRead: $e');
+    }
+  }
+
+  /// Mark all notifications as read for the current user
+  static Future<void> markAllUserNotificationsRead() async {
+    try {
+      final user = currentUser;
+      if (user == null) return;
+      
+      final now = DateTime.now().toUtc().toIso8601String();
+      await client
+          .from('user_notifications')
+          .update({'read_at': now})
+          .eq('user_id', user.id);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in markAllUserNotificationsRead: $e');
+    }
+  }
+
   /// Retrieve all active/upcoming bookings/sessions (pending, confirmed, active) for the user
   static Future<List<Map<String, dynamic>>> getUpcomingBookings(String userId) async {
     try {
       final responseList = await client
           .from('bookings')
-          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name)');
+          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions)')
+          .eq('user_id', userId)
+          .inFilter('status', ['pending', 'confirmed', 'active', 'in_progress']);
 
       final List<Map<String, dynamic>> list = [];
       for (final item in responseList) {
@@ -1248,10 +1601,8 @@ class SupabaseService {
         if (notesStr == null) continue;
         try {
           final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
-          if (metadata['user_id'] != userId) continue;
-
           final status = item['status'] as String? ?? 'pending';
-          if (!['pending', 'confirmed', 'active'].contains(status)) continue;
+          if (!['pending', 'confirmed', 'active', 'in_progress'].contains(status)) continue;
 
           final bookingId = item['id'] as String;
           final serviceType = item['service_type'] as String? ?? 'Care';
@@ -1272,8 +1623,15 @@ class SupabaseService {
           final totalAmount = metadata['total_amount'] as int? ?? 0;
 
           String caregiverName = 'Sunita Rao';
+          double professionalRating = 0.0;
+          int professionalTotalSessions = 0;
           if (item['professionals'] != null) {
-            caregiverName = (item['professionals'] as Map<String, dynamic>)['full_name'] as String? ?? caregiverName;
+            final professional = item['professionals'] as Map<String, dynamic>;
+            caregiverName = professional['full_name'] as String? ?? caregiverName;
+            professionalRating =
+                double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
+            professionalTotalSessions =
+                int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
           }
 
           String activeStatus = status;
@@ -1313,6 +1671,8 @@ class SupabaseService {
             'amount': totalAmount,
             'status': activeStatus,
             'caregiver_name': caregiverName,
+            'professional_rating': professionalRating,
+            'professional_total_sessions': professionalTotalSessions,
             'arrival_requested': activeStatus == 'arrived',
             'care_notes': metadata['care_notes'],
           });
@@ -1333,7 +1693,9 @@ class SupabaseService {
     try {
       final responseList = await client
           .from('bookings')
-          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name)');
+          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions)')
+          .eq('user_id', userId)
+          .inFilter('status', ['completed', 'no_show']);
 
       final List<Map<String, dynamic>> list = [];
       for (final item in responseList) {
@@ -1341,10 +1703,8 @@ class SupabaseService {
         if (notesStr == null) continue;
         try {
           final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
-          if (metadata['user_id'] != userId) continue;
-
           final status = item['status'] as String? ?? 'pending';
-          if (status != 'completed') continue;
+          if (status != 'completed' && status != 'no_show') continue;
 
           final bookingId = item['id'] as String;
           final serviceType = item['service_type'] as String? ?? 'Care';
@@ -1365,8 +1725,15 @@ class SupabaseService {
           final totalAmount = metadata['total_amount'] as int? ?? 0;
 
           String caregiverName = 'Sunita Rao';
+          double professionalRating = 0.0;
+          int professionalTotalSessions = 0;
           if (item['professionals'] != null) {
-            caregiverName = (item['professionals'] as Map<String, dynamic>)['full_name'] as String? ?? caregiverName;
+            final professional = item['professionals'] as Map<String, dynamic>;
+            caregiverName = professional['full_name'] as String? ?? caregiverName;
+            professionalRating =
+                double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
+            professionalTotalSessions =
+                int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
           }
 
           bool isRated = false;
@@ -1419,8 +1786,10 @@ class SupabaseService {
             'scheduled_start': scheduledStart,
             'duration_hours': 3.0,
             'caregiver_name': caregiverName,
+            'professional_rating': professionalRating,
+            'professional_total_sessions': professionalTotalSessions,
             'amount': totalAmount,
-            'status': 'completed',
+            'status': status,
             'isRated': isRated,
             'rating': rating,
             'rating_punctuality': punctuality,
@@ -1583,10 +1952,122 @@ class SupabaseService {
       return _mockActiveBooking;
     }
     try {
-      final user = currentUser;
-      if (user != null) {
-        return await getActiveBooking(user.id);
+      final response = await client
+          .from('bookings')
+          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions), hubs(name, address)')
+          .eq('id', bookingId)
+          .maybeSingle();
+
+      if (response == null) return null;
+
+      final serviceType = response['service_type'] as String? ?? 'Care';
+      final status = response['status'] as String? ?? 'pending';
+
+      DateTime scheduledStart = DateTime.now();
+      try {
+        final dateStr = response['scheduled_date']?.toString() ?? '';
+        final timeStr = response['scheduled_time']?.toString() ?? '';
+        if (dateStr.isNotEmpty) {
+          scheduledStart = timeStr.isNotEmpty
+              ? DateTime.parse('${dateStr}T$timeStr')
+              : DateTime.parse(dateStr);
+        }
+      } catch (_) {}
+
+      final notesStr = response['notes'] as String?;
+      int totalAmount = 0;
+      String? careNotes;
+      String? addressId;
+      if (notesStr != null) {
+        try {
+          final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
+          totalAmount = metadata['total_amount'] as int? ?? 0;
+          careNotes = metadata['care_notes'] as String?;
+          addressId = metadata['address_id'] as String?;
+        } catch (_) {}
       }
+
+      String caregiverName = 'Professional';
+      double professionalRating = 0.0;
+      int professionalTotalSessions = 0;
+      if (response['professionals'] != null) {
+        final professional = response['professionals'] as Map<String, dynamic>;
+        caregiverName = professional['full_name'] as String? ?? caregiverName;
+        professionalRating =
+            double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
+        professionalTotalSessions =
+            int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
+      }
+
+      String hubName = '';
+      String hubAddress = '';
+      if (response['hubs'] != null) {
+        final hubMap = response['hubs'] as Map<String, dynamic>;
+        hubName = hubMap['name'] as String? ?? '';
+        hubAddress = hubMap['address'] as String? ?? '';
+      }
+
+      String userAddress = '';
+      if (addressId != null) {
+        try {
+          final addrRes = await client
+              .from('addresses')
+              .select('flat, street, city, pin_code')
+              .eq('id', addressId)
+              .maybeSingle();
+          if (addrRes != null) {
+            final flat = addrRes['flat'] ?? '';
+            final street = addrRes['street'] ?? '';
+            final city = addrRes['city'] ?? '';
+            final pin = addrRes['pin_code'] ?? '';
+            userAddress = '$flat, $street, $city, $pin';
+          }
+        } catch (_) {}
+      }
+
+      String activeStatus = status;
+      String? sessionId;
+      DateTime? actualStart;
+      DateTime? actualEnd;
+      String? arrivalCode;
+      try {
+        final sessionRes = await client
+            .from('sessions')
+            .select('id, status, start_time, end_time, arrival_code')
+            .eq('booking_id', bookingId)
+            .limit(1)
+            .maybeSingle();
+        if (sessionRes != null) {
+          activeStatus = sessionRes['status'] as String? ?? activeStatus;
+          sessionId = sessionRes['id'] as String?;
+          arrivalCode = sessionRes['arrival_code']?.toString();
+          final startTimeStr = sessionRes['start_time'] as String?;
+          final endTimeStr = sessionRes['end_time'] as String?;
+          if (startTimeStr != null) actualStart = DateTime.parse(startTimeStr);
+          if (endTimeStr != null) actualEnd = DateTime.parse(endTimeStr);
+        }
+      } catch (_) {}
+
+      return {
+        'booking_id': bookingId,
+        'session_id': sessionId,
+        'title': serviceType,
+        'scheduled_start': scheduledStart,
+        'actual_start': actualStart,
+        'actual_end': actualEnd,
+        'amount': totalAmount,
+        'status': activeStatus,
+        'caregiver_name': caregiverName,
+        'professional_rating': professionalRating,
+        'professional_total_sessions': professionalTotalSessions,
+        'hub_name': hubName,
+        'hub_address': hubAddress,
+        'user_address': userAddress,
+        'arrival_requested': activeStatus == 'arrived',
+        'arrival_code': arrivalCode,
+        'care_notes': careNotes,
+        'duration_hours': (response['duration_hours'] as num?)?.toDouble() ?? 2.0,
+      };
     } catch (e) {
       // ignore: avoid_print
       print('Error in getBookingStatus: $e');
@@ -1624,36 +2105,63 @@ class SupabaseService {
 
     try {
       final user = currentUser;
-      if (user != null) {
-        // Find session for the booking
-        final sessionRes = await client
-            .from('sessions')
-            .select('id')
-            .eq('booking_id', bookingId)
-            .limit(1)
-            .maybeSingle();
+      if (user == null) {
+        throw Exception('User not logged in');
+      }
+      // Find session for the booking
+      final sessionRes = await client
+          .from('sessions')
+          .select('id, professional_id')
+          .eq('booking_id', bookingId)
+          .limit(1)
+          .maybeSingle();
 
-        if (sessionRes != null) {
-          final sessionId = sessionRes['id'] as String;
-          await client.from('session_feedback').insert({
-            'session_id': sessionId,
-            'user_id': user.id,
-            'rating': overallRating,
-            'punctuality': punctuality,
-            'professionalism': professionalism,
-            'quality': qualityOfCare,
-            'comment': comment,
-          });
+      if (sessionRes == null) {
+        throw Exception('Session not found for this booking');
+      }
+
+      final sessionId = sessionRes['id'] as String;
+      final existingFeedback = await client
+          .from('session_feedback')
+          .select('id, rating')
+          .eq('session_id', sessionId)
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+      // Consumer app only writes session_feedback.
+      // professionals.avg_rating / total_sessions are updated by DB triggers.
+      final feedbackPayload = {
+        'session_id': sessionId,
+        'user_id': user.id,
+        'rating': overallRating,
+        'punctuality': punctuality,
+        'professionalism': professionalism,
+        'quality': qualityOfCare,
+        'comment': comment,
+      };
+
+      if (existingFeedback != null) {
+        final updated = await client
+            .from('session_feedback')
+            .update(feedbackPayload)
+            .eq('id', existingFeedback['id'])
+            .select('id')
+            .maybeSingle();
+        if (updated == null) {
+          throw Exception('Failed to update session feedback.');
         }
+      } else {
+        await client.from('session_feedback').insert(feedbackPayload);
       }
     } catch (e) {
       // ignore: avoid_print
       print('Error in rateSession: $e');
+      rethrow;
     }
   }
 
-  /// Fetch activity logs for a given session from Supabase
-  static Future<List<Map<String, dynamic>>> getSessionActivityLogs(String sessionId) async {
+  /// Fetch activity logs for a given session from Supabase.
+  static Future<List<Map<String, dynamic>>> getActivityLogs(String sessionId) async {
     try {
       final response = await client
           .from('activity_logs')
@@ -1666,6 +2174,64 @@ class SupabaseService {
       // ignore: avoid_print
       print('Error in getSessionActivityLogs: $e');
       return [];
+    }
+  }
+
+  /// Backward-compatible alias.
+  static Future<List<Map<String, dynamic>>> getSessionActivityLogs(String sessionId) {
+    return getActivityLogs(sessionId);
+  }
+
+  /// Fetch chat messages for a session, oldest first for chat rendering.
+  static Future<List<Map<String, dynamic>>> getMessages(String sessionId) async {
+    try {
+      final response = await client
+          .from('messages')
+          .select('id, session_id, sender_type, sender_id, content, sent_at')
+          .eq('session_id', sessionId)
+          .order('sent_at', ascending: true);
+      return List<Map<String, dynamic>>.from(response);
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in getMessages: $e');
+      return [];
+    }
+  }
+
+  /// Realtime stream for session chat messages.
+  static Stream<List<Map<String, dynamic>>> getMessagesStream(String sessionId) {
+    return client
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .eq('session_id', sessionId)
+        .order('sent_at', ascending: true)
+        .map((rows) => rows
+            .map((row) => Map<String, dynamic>.from(row))
+            .toList());
+  }
+
+  /// Send a chat message for a session.
+  static Future<void> sendMessage({
+    required String sessionId,
+    required String senderId,
+    required String senderType,
+    required String content,
+  }) async {
+    final trimmed = content.trim();
+    if (trimmed.isEmpty) return;
+
+    try {
+      await client.from('messages').insert({
+        'session_id': sessionId,
+        'sender_type': senderType,
+        'sender_id': senderId,
+        'content': trimmed,
+        'sent_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error in sendMessage: $e');
+      rethrow;
     }
   }
 
@@ -1855,56 +2421,117 @@ class SupabaseService {
       }
 
       // 2. Parse booking start and end time window
-      DateTime bookingStart = selectedDate;
+      DateTime? bookingStart;
       try {
         final cleanTime = selectedTime.trim().toUpperCase();
-        final timeParts = cleanTime.split(':');
-        if (timeParts.length >= 2) {
-          int hour = int.parse(timeParts[0]);
-          final minuteStr = timeParts[1].split(' ')[0];
-          int minute = int.parse(minuteStr);
-          
-          final isPm = cleanTime.contains('PM');
-          final isAm = cleanTime.contains('AM');
-          if (isPm && hour < 12) hour += 12;
-          if (isAm && hour == 12) hour = 0;
-
+        final maybeIso = DateTime.tryParse(
+          '${selectedDate.toIso8601String().substring(0, 10)}T$selectedTime',
+        );
+        if (maybeIso != null) {
           bookingStart = DateTime(
             selectedDate.year,
             selectedDate.month,
             selectedDate.day,
-            hour,
-            minute,
+            maybeIso.hour,
+            maybeIso.minute,
           );
+        } else {
+          final timeParts = cleanTime.split(':');
+          if (timeParts.length >= 2) {
+            int hour = int.parse(timeParts[0]);
+            final minuteStr = timeParts[1].split(' ')[0];
+            int minute = int.parse(minuteStr);
+
+            final isPm = cleanTime.contains('PM');
+            final isAm = cleanTime.contains('AM');
+            if (isPm && hour < 12) hour += 12;
+            if (isAm && hour == 12) hour = 0;
+
+            bookingStart = DateTime(
+              selectedDate.year,
+              selectedDate.month,
+              selectedDate.day,
+              hour,
+              minute,
+            );
+          }
         }
-      } catch (_) {
-        // Fallback: 9 AM
-        bookingStart = DateTime(
-          selectedDate.year,
-          selectedDate.month,
-          selectedDate.day,
-          9,
-          0,
-        );
+      } catch (_) {}
+
+      if (bookingStart == null) {
+        // Do not apply any hardcoded clock fallback; if selected time cannot
+        // be parsed, matching is unreliable.
+        return [];
       }
 
       double durationHours = 2.0;
       try {
-        final numMatch = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(selectedDuration.toLowerCase());
-        if (numMatch != null) {
-          durationHours = double.parse(numMatch.group(1)!);
+        final normalizedDuration = selectedDuration.toLowerCase();
+        final hrMatch = RegExp(r'(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour)').firstMatch(normalizedDuration);
+        final minMatch = RegExp(r'(\d+)\s*(m|min|mins|minute)').firstMatch(normalizedDuration);
+        if (hrMatch != null || minMatch != null) {
+          final hrs = hrMatch != null ? double.parse(hrMatch.group(1)!) : 0.0;
+          final mins = minMatch != null ? int.parse(minMatch.group(1)!) : 0;
+          durationHours = hrs + (mins / 60.0);
+        } else {
+          final numMatch = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(normalizedDuration);
+          if (numMatch != null) {
+            durationHours = double.parse(numMatch.group(1)!);
+          }
         }
       } catch (_) {}
+      if (durationHours <= 0) durationHours = 2.0;
 
       final bookingEnd = bookingStart.add(Duration(minutes: (durationHours * 60).round()));
 
-      // 3. Fetch all candidate professionals (optionally filtering by hub_id)
-      var proQuery = client.from('professionals').select();
-      if (userHubId != null && userHubId.isNotEmpty) {
-        proQuery = proQuery.eq('hub_id', userHubId);
+      DateTime? parseBookingStart(dynamic dateObj, dynamic timeObj) {
+        final dateStr = dateObj?.toString() ?? '';
+        final rawTime = timeObj?.toString().trim() ?? '';
+        if (dateStr.isEmpty) return null;
+        try {
+          if (rawTime.isEmpty) return DateTime.parse(dateStr);
+          final normalized = rawTime.toUpperCase();
+          final timeParts = normalized.split(':');
+          if (timeParts.length < 2) return DateTime.parse(dateStr);
+          int hour = int.tryParse(timeParts[0]) ?? 0;
+          final minuteStr = timeParts[1].split(' ').first;
+          final minute = int.tryParse(minuteStr) ?? 0;
+          final isPm = normalized.contains('PM');
+          final isAm = normalized.contains('AM');
+          if (isPm && hour < 12) hour += 12;
+          if (isAm && hour == 12) hour = 0;
+          final baseDate = DateTime.parse(dateStr);
+          return DateTime(
+            baseDate.year,
+            baseDate.month,
+            baseDate.day,
+            hour,
+            minute,
+          );
+        } catch (_) {
+          return null;
+        }
       }
-      final responseList = await proQuery;
-      final professionalsList = List<Map<String, dynamic>>.from(responseList);
+
+      // 3. Fetch all candidate professionals (optionally filtering by hub_id)
+      final List<Map<String, dynamic>> professionalsList;
+      if (userHubId != null && userHubId.isNotEmpty) {
+        final hubScoped = await client
+            .from('professionals')
+            .select()
+            .eq('hub_id', userHubId);
+        if (hubScoped.isNotEmpty) {
+          professionalsList = List<Map<String, dynamic>>.from(hubScoped);
+        } else {
+          // Fallback: if no professionals are found in the primary hub, search
+          // globally so overlapping/nearby hub coverage can still return a match.
+          final global = await client.from('professionals').select();
+          professionalsList = List<Map<String, dynamic>>.from(global);
+        }
+      } else {
+        final global = await client.from('professionals').select();
+        professionalsList = List<Map<String, dynamic>>.from(global);
+      }
 
       if (professionalsList.isEmpty) return [];
 
@@ -1915,7 +2542,7 @@ class SupabaseService {
       try {
         final shiftRes = await client
             .from('shifts')
-            .select('professional_id, start_time, end_time, status')
+            .select('professional_id, start_time, end_time, status, recurring_days, is_standby, hub_id')
             .inFilter('professional_id', proIds)
             .eq('status', 'scheduled');
         shifts = List<Map<String, dynamic>>.from(shiftRes);
@@ -1924,7 +2551,22 @@ class SupabaseService {
         print('Warning: Failed to fetch shifts: $e');
       }
 
-      // 5. Fetch Session overlapping calendars
+      // 5. Fetch overlapping bookings to avoid repeatedly assigning
+      // professionals who are already booked for the same slot.
+      List<Map<String, dynamic>> overlappingBookings = [];
+      try {
+        final bookingRes = await client
+            .from('bookings')
+            .select('professional_id, scheduled_date, scheduled_time, duration_hours, status')
+            .inFilter('professional_id', proIds)
+            .inFilter('status', ['pending', 'confirmed', 'active', 'in_progress']);
+        overlappingBookings = List<Map<String, dynamic>>.from(bookingRes);
+      } catch (e) {
+        // ignore: avoid_print
+        print('Warning: Failed to fetch overlapping bookings: $e');
+      }
+
+      // 6. Fetch Session overlapping calendars
       List<Map<String, dynamic>> overlappingSessions = [];
       try {
         final sessionRes = await client
@@ -1938,7 +2580,7 @@ class SupabaseService {
         print('Warning: Failed to fetch overlapping sessions: $e');
       }
 
-      // 6. Fetch User feedback for repeat preference scoring
+      // 7. Fetch User feedback for repeat preference scoring
       List<Map<String, dynamic>> userFeedbacks = [];
       List<Map<String, dynamic>> pastSessions = [];
       try {
@@ -1961,7 +2603,7 @@ class SupabaseService {
         print('Warning: Failed to fetch user feedback/history: $e');
       }
 
-      // 7. Fetch all active sessions this week for workload calculation
+      // 8. Fetch all active sessions this week for workload calculation
       final now = DateTime.now();
       final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
       final weekStart = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
@@ -1979,9 +2621,10 @@ class SupabaseService {
 
       final eligibleAndScored = <Map<String, dynamic>>[];
 
-      // 8. Filter and Score
+      // 9. Filter and Score
       for (final p in professionalsList) {
         final pId = p['id'] as String;
+        final dutyStatus = p['duty_status']?.toString().toLowerCase() ?? '';
 
         // Hard Filter 1: Employment status must be active
         if (p['employment_status']?.toString().toLowerCase() != 'active') continue;
@@ -1994,37 +2637,103 @@ class SupabaseService {
         final pillars = p['service_pillars'];
         bool supportsPillar = false;
         if (pillars is List) {
-          supportsPillar = pillars.map((e) => e.toString().toLowerCase()).contains(servicePillar.toLowerCase());
+          final normalizedPillars = pillars
+              .map((e) => e.toString().trim().toLowerCase())
+              .where((e) => e.isNotEmpty)
+              .toList();
+          supportsPillar = normalizedPillars.isEmpty ||
+              normalizedPillars.contains(servicePillar.toLowerCase());
         } else if (pillars is String) {
-          supportsPillar = pillars.toLowerCase() == servicePillar.toLowerCase();
+          final normalizedPillar = pillars.trim().toLowerCase();
+          supportsPillar = normalizedPillar.isEmpty ||
+              normalizedPillar == servicePillar.toLowerCase();
+        } else if (pillars == null) {
+          // Do not lock out standby professionals just because service pillars
+          // have not been configured yet in admin.
+          supportsPillar = true;
         }
         if (!supportsPillar) continue;
 
-        // Hard Filter 4: Shift availability (Scheduled shift must cover booking interval)
-        // Note: Fallback to skip if shifts are empty in the DB to avoid lock-outs during local testing
-        if (shifts.isNotEmpty) {
+        // Hard Filter 4: Shift availability (Scheduled shift must cover booking interval).
+        // If shift rows are missing or malformed for a professional, do not
+        // eliminate them solely on that basis.
+        if (dutyStatus != 'standby' && shifts.isNotEmpty) {
           final proShifts = shifts.where((s) => s['professional_id'] == pId);
           bool hasCoveringShift = false;
+          bool hasValidShiftWindow = false;
           for (final s in proShifts) {
-            final sStart = DateTime.tryParse(s['start_time'] ?? '');
-            final sEnd = DateTime.tryParse(s['end_time'] ?? '');
+            final sStart = DateTime.tryParse(s['start_time']?.toString() ?? '');
+            final sEnd = DateTime.tryParse(s['end_time']?.toString() ?? '');
             if (sStart != null && sEnd != null) {
-              if (sStart.isBefore(bookingStart.add(const Duration(seconds: 1))) &&
-                  sEnd.isAfter(bookingEnd.subtract(const Duration(seconds: 1)))) {
+              DateTime shiftWindowStart = sStart;
+              DateTime shiftWindowEnd = sEnd;
+
+              final recurringDaysRaw = s['recurring_days'];
+              final recurringDays = recurringDaysRaw is List
+                  ? recurringDaysRaw
+                      .map((e) => int.tryParse(e.toString()))
+                      .whereType<int>()
+                      .toList()
+                  : <int>[];
+
+              if (recurringDays.isNotEmpty) {
+                // Use the selected booking date with shift time-of-day so future
+                // bookings keep matching recurring weekly shifts correctly.
+                if (!recurringDays.contains(selectedDate.weekday)) {
+                  continue;
+                }
+                shiftWindowStart = DateTime(
+                  selectedDate.year,
+                  selectedDate.month,
+                  selectedDate.day,
+                  sStart.toLocal().hour,
+                  sStart.toLocal().minute,
+                );
+                shiftWindowEnd = DateTime(
+                  selectedDate.year,
+                  selectedDate.month,
+                  selectedDate.day,
+                  sEnd.toLocal().hour,
+                  sEnd.toLocal().minute,
+                );
+                if (!shiftWindowEnd.isAfter(shiftWindowStart)) {
+                  shiftWindowEnd = shiftWindowEnd.add(const Duration(days: 1));
+                }
+              }
+
+              hasValidShiftWindow = true;
+              if (shiftWindowStart.isBefore(bookingStart.add(const Duration(seconds: 1))) &&
+                  shiftWindowEnd.isAfter(bookingEnd.subtract(const Duration(seconds: 1)))) {
                 hasCoveringShift = true;
                 break;
               }
             }
           }
-          if (!hasCoveringShift) continue;
+          if (hasValidShiftWindow && !hasCoveringShift) continue;
         }
 
-        // Hard Filter 5: Overlap conflict checks (30 mins travel buffer)
+        // Hard Filter 5: Booking overlap conflict checks (30 mins travel buffer)
         bool hasConflict = false;
         final buffer = const Duration(minutes: 30);
         final paddedStart = bookingStart.subtract(buffer);
         final paddedEnd = bookingEnd.add(buffer);
 
+        final proBookings = overlappingBookings.where((b) => b['professional_id'] == pId);
+        for (final b in proBookings) {
+          final existingStart = parseBookingStart(b['scheduled_date'], b['scheduled_time']);
+          if (existingStart == null) continue;
+          final existingDurationHours = (b['duration_hours'] as num?)?.toDouble() ?? 2.0;
+          final existingEnd = existingStart.add(
+            Duration(minutes: (existingDurationHours * 60).round()),
+          );
+          if (existingStart.isBefore(paddedEnd) && existingEnd.isAfter(paddedStart)) {
+            hasConflict = true;
+            break;
+          }
+        }
+        if (hasConflict) continue;
+
+        // Hard Filter 6: Session overlap conflict checks (30 mins travel buffer)
         final proSessions = overlappingSessions.where((s) => s['professional_id'] == pId);
         for (final s in proSessions) {
           final sStartStr = s['start_time'];
@@ -2068,7 +2777,12 @@ class SupabaseService {
 
         // Scoring factor 4: Workload Balance (Weight = 0.20)
         final proWeekSessions = weeklySessions.where((s) => s['professional_id'] == pId).length;
-        final workloadScore = (100.0 - (proWeekSessions * 10.0)).clamp(0.0, 100.0);
+        double workloadScore = (100.0 - (proWeekSessions * 10.0)).clamp(0.0, 100.0);
+
+        // Small boost for professionals explicitly marked standby at the hub.
+        if (dutyStatus == 'standby') {
+          workloadScore = (workloadScore + 10.0).clamp(0.0, 100.0);
+        }
 
         // Final score sum
         final finalScore = (preferenceScore * 0.40) +
@@ -2099,6 +2813,10 @@ class SupabaseService {
 
   /// Mark booking as no-show when the professional fails to arrive
   static Future<void> markNoShow(String bookingId) async {
+    _initMockData();
+    if (bookingId == 'mock-booking-active-1' && _mockActiveBooking != null) {
+      _mockActiveBooking!['status'] = 'no_show';
+    }
     try {
       await client
           .from('bookings')

@@ -86,11 +86,16 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
     final caregiverName = widget.sessionData['caregiver_name'] ?? 'Sunita Rao';
     final title = widget.sessionData['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
+    final professionalRating =
+        double.tryParse(widget.sessionData['professional_rating']?.toString() ?? '');
+    final professionalSessions =
+        int.tryParse(widget.sessionData['professional_total_sessions']?.toString() ?? '') ?? 0;
 
-    // Parse date/time strings
-    final start = widget.sessionData['scheduled_start'] as DateTime;
-    final end = start.add(const Duration(hours: 3, minutes: 2));
-    final durationStr = '3 hrs 2 min';
+    final start = (widget.sessionData['actual_start'] ?? widget.sessionData['scheduled_start']) as DateTime;
+    final explicitEnd = widget.sessionData['actual_end'] as DateTime?;
+    final durationHours = (widget.sessionData['duration_hours'] as num?)?.toDouble() ?? 2.0;
+    final end = explicitEnd ?? start.add(Duration(minutes: (durationHours * 60).round()));
+    final durationStr = _formatDuration(start, end, durationHours);
 
     // Format start time
     String formatTime(DateTime time) {
@@ -207,6 +212,29 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 4),
+                                if (professionalRating != null && professionalRating > 0) ...[
+                                  Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.star_rounded,
+                                        size: 14,
+                                        color: Color(0xFFDCA857),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        professionalSessions > 0
+                                            ? '${professionalRating.toStringAsFixed(1)} ($professionalSessions ${professionalSessions == 1 ? "session" : "sessions"})'
+                                            : professionalRating.toStringAsFixed(1),
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: HestiaColors.textLight,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                ],
                                 Text(
                                   '$displayTitle · $durationStr',
                                   style: const TextStyle(
@@ -461,5 +489,17 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
       return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
     }
     return parts[0][0].toUpperCase();
+  }
+
+  String _formatDuration(DateTime start, DateTime end, double fallbackHours) {
+    int minutes = end.toUtc().difference(start.toUtc()).inMinutes;
+    if (minutes <= 0) {
+      minutes = (fallbackHours * 60).round();
+    }
+    final hours = minutes ~/ 60;
+    final remaining = minutes % 60;
+    if (hours == 0) return '$remaining min';
+    if (remaining == 0) return '$hours hr';
+    return '$hours hr $remaining min';
   }
 }

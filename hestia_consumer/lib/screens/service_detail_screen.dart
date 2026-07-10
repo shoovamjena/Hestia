@@ -34,7 +34,7 @@ class ServiceDetail {
   final String rating;
   final String ratingCount;
   final String imageUrl;
-  final IconData icon;
+  final String iconAsset;
   final List<String> whatsIncluded;
   final List<String> doesNotInclude;
   final List<ServiceStep> howItsDone;
@@ -50,7 +50,7 @@ class ServiceDetail {
     required this.rating,
     required this.ratingCount,
     required this.imageUrl,
-    required this.icon,
+    required this.iconAsset,
     required this.whatsIncluded,
     required this.doesNotInclude,
     required this.howItsDone,
@@ -85,7 +85,7 @@ class ServiceDetailScreen extends StatefulWidget {
       rating: '4.9',
       ratingCount: '(12.4k ratings)',
       imageUrl: 'https://images.unsplash.com/photo-1555252333-9f8e92e65df9?q=80&w=600',
-      icon: Icons.local_hospital,
+      iconAsset: 'assets/images/services/post_delivery.png',
       whatsIncluded: [
         'Newborn bathing, skin care & swaddling',
         'Breastfeeding positioning & latch support',
@@ -146,7 +146,7 @@ class ServiceDetailScreen extends StatefulWidget {
       rating: '4.8',
       ratingCount: '(18.2k ratings)',
       imageUrl: 'https://images.unsplash.com/photo-1502086223501-7ea6ecd79368?q=80&w=600',
-      icon: Icons.child_care,
+      iconAsset: 'assets/images/services/babysitting.png',
       whatsIncluded: [
         'Age-appropriate playtime & creative activities',
         'Assistance with homework and reading',
@@ -207,7 +207,7 @@ class ServiceDetailScreen extends StatefulWidget {
       rating: '4.9',
       ratingCount: '(9.8k ratings)',
       imageUrl: 'https://images.unsplash.com/photo-1576765608535-5f04d1e3f289?q=80&w=600',
-      icon: Icons.accessibility_new,
+      iconAsset: 'assets/images/services/mobility.png',
       whatsIncluded: [
         'Assistance with transfers (bed to chair, etc.)',
         'Support with walking and outdoor walks',
@@ -268,7 +268,7 @@ class ServiceDetailScreen extends StatefulWidget {
       rating: '4.7',
       ratingCount: '(5.1k ratings)',
       imageUrl: 'https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?q=80&w=600',
-      icon: Icons.favorite_border,
+      iconAsset: 'assets/images/services/pre_pregnancy.png',
       whatsIncluded: [
         'Personalized birth planning & consultation',
         'Holistic prenatal nutrition & diet advice',
@@ -328,7 +328,7 @@ class ServiceDetailScreen extends StatefulWidget {
       rating: '4.8',
       ratingCount: '(7.6k ratings)',
       imageUrl: 'https://images.unsplash.com/photo-1584622650111-993a426fbf0a?q=80&w=600',
-      icon: Icons.bathtub,
+      iconAsset: 'assets/images/services/bathing.png',
       whatsIncluded: [
         'Safe transfers in & out of bath area',
         'Gentle bathing, body wash & hair washing',
@@ -388,7 +388,7 @@ class ServiceDetailScreen extends StatefulWidget {
       rating: '4.6',
       ratingCount: '(3.4k ratings)',
       imageUrl: 'https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=600',
-      icon: Icons.room_service,
+      iconAsset: 'assets/images/services/concierge.png',
       whatsIncluded: [
         'Grocery shopping & prescription refills',
         'Post office runs & package drop-offs',
@@ -440,6 +440,27 @@ class ServiceDetailScreen extends StatefulWidget {
       ],
     ),
   };
+
+  static ServiceDetail? resolveServiceDetail(String labelOrKey) {
+    final key = labelOrKey
+        .replaceAll('\n', '')
+        .replaceAll(' ', '')
+        .replaceAll('-', '')
+        .toLowerCase();
+
+    if (key.contains('postdelivery')) return servicesData['post-delivery'];
+    if (key.contains('babysitting')) return servicesData['babysitting'];
+    if (key.contains('mobility')) return servicesData['mobility'];
+    if (key.contains('prepregnancy')) return servicesData['pre-pregnancy'];
+    if (key.contains('bathing')) return servicesData['bathing'];
+    if (key.contains('concierge')) return servicesData['concierge'];
+    return null;
+  }
+
+  static String iconAssetFor(String labelOrKey) {
+    return resolveServiceDetail(labelOrKey)?.iconAsset ??
+        'assets/images/services/post_delivery.png';
+  }
 }
 
 class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
@@ -454,18 +475,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
   }
 
   ServiceDetail _getServiceDetail() {
-    // Clean key and lookup
-    final key = widget.serviceKey.replaceAll('\n', '').replaceAll(' ', '').replaceAll('-', '').toLowerCase();
-    
-    // Find closest match or default to post-delivery
-    if (key.contains('postdelivery')) return ServiceDetailScreen.servicesData['post-delivery']!;
-    if (key.contains('babysitting')) return ServiceDetailScreen.servicesData['babysitting']!;
-    if (key.contains('mobility')) return ServiceDetailScreen.servicesData['mobility']!;
-    if (key.contains('prepregnancy')) return ServiceDetailScreen.servicesData['pre-pregnancy']!;
-    if (key.contains('bathing')) return ServiceDetailScreen.servicesData['bathing']!;
-    if (key.contains('concierge')) return ServiceDetailScreen.servicesData['concierge']!;
-    
-    return ServiceDetailScreen.servicesData['post-delivery']!;
+    return ServiceDetailScreen.resolveServiceDetail(widget.serviceKey) ??
+        ServiceDetailScreen.servicesData['post-delivery']!;
   }
 
   Widget _buildBookOrStepper(ServiceDetail detail) {
