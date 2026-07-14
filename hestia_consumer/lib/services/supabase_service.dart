@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -8,6 +9,8 @@ class SupabaseService {
   static String? pendingSignUpName;
   static String? pendingSignUpPassword;
   static String? pendingSignUpPhone;
+  static String? pendingOnboardingFullName;
+  static String? pendingOnboardingEmail;
 
   // Static variables to store in-memory mock bookings during app execution session
   static Map<String, dynamic>? _mockActiveBooking;
@@ -218,7 +221,7 @@ class SupabaseService {
     }
   }
 
-  /// Check if the user's profile is complete using relational and legacy sources.
+  /// Check if the user has finished the post sign-in onboarding flow.
   static Future<bool> isProfileComplete(String userId) async {
     try {
       final userRow = await client
@@ -226,31 +229,197 @@ class SupabaseService {
           .select('onboarding_complete')
           .eq('id', userId)
           .maybeSingle();
-      if (userRow?['onboarding_complete'] == true) {
-        return true;
-      }
-
-      final memberRows = await client
-          .from('household_members')
-          .select('id')
-          .eq('user_id', userId)
-          .limit(1);
-      if (memberRows.isNotEmpty) {
-        return true;
-      }
-
-      final legacyProfile = await downloadProfileJson(userId);
-      final legacyMembers = legacyProfile?['household_members'];
-      if (legacyMembers is List && legacyMembers.isNotEmpty) {
-        return true;
-      }
-
-      return false;
+      return userRow?['onboarding_complete'] == true;
     } catch (e) {
       // ignore: avoid_print
       print('Warning: isProfileComplete check failed: $e');
       return false;
     }
+  }
+
+  /// Normalize a phone number to E.164 (`+91XXXXXXXXXX`) for consistent storage.
+  static String? _normalizeStoredPhone(String? phone) {
+    if (phone == null) return null;
+    final trimmed = phone.trim();
+    if (trimmed.isEmpty) return null;
+
+    var digits = trimmed.replaceAll(RegExp(r'\D'), '');
+    if (digits.length == 10) {
+      digits = '91$digits';
+    }
+    if (digits.isEmpty) return null;
+    return '+$digits';
+  }
+
+  /// Upsert a row in `users`, clearing stale phone conflicts from prior auth
+  /// sessions before writing.
+  static Future<void> _upsertUserRecord({
+    required String id,
+    required String fullName,
+    String? email,
+    String? phone,
+    bool? onboardingComplete,
+  }) async {
+    final trimmedEmail = email?.trim();
+    final dbEmail =
+        (trimmedEmail == null || trimmedEmail.isEmpty) ? null : trimmedEmail;
+    final dbPhone = _normalizeStoredPhone(phone);
+
+    if (dbPhone != null) {
+      try {
+        final conflicting = await client
+            .from('users')
+            .select('id')
+            .eq('phone', dbPhone)
+            .maybeSingle();
+        if (conflicting != null && conflicting['id']?.toString() != id) {
+          await client.from('users').update({
+            'phone': null,
+            'updated_at': DateTime.now().toIso8601String(),
+          }).eq('id', conflicting['id']);
+        }
+      } catch (e) {
+        // ignore: avoid_print
+        print('Warning: Failed to resolve phone conflict: $e');
+      }
+    }
+
+    final payload = <String, dynamic>{
+      'id': id,
+      'full_name': fullName,
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+    if (dbEmail != null) payload['email'] = dbEmail;
+    if (dbPhone != null) payload['phone'] = dbPhone;
+    if (onboardingComplete != null) {
+      payload['onboarding_complete'] = onboardingComplete;
+    }
+
+    try {
+      await client.from('users').upsert(payload);
+    } on PostgrestException catch (e) {
+      // Last resort: save everything except the conflicting phone.
+      if (e.code == '23505' && dbPhone != null) {
+        payload.remove('phone');
+        await client.from('users').upsert(payload);
+      } else {
+        rethrow;
+      }
+    }
+  }
+
+  /// Save name and email during the first onboarding step.
+  static Future<void> saveOnboardingBasics({
+    required String id,
+    required String fullName,
+    String? email,
+    String? phone,
+  }) async {
+    await _upsertUserRecord(
+      id: id,
+      fullName: fullName,
+      email: email,
+      phone: phone,
+      onboardingComplete: false,
+    );
+
+    try {
+      await client.auth.updateUser(
+        UserAttributes(data: {'full_name': fullName}),
+      );
+    } catch (_) {}
+  }
+
+  /// Save the user's primary address and mark onboarding complete.
+  static Future<void> completeOnboarding({
+    required String id,
+    required String fullName,
+    String? email,
+    String? phone,
+    required Map<String, dynamic> address,
+    bool? withinCoverage,
+  }) async {
+    await saveAddressOnly(id: id, address: address, withinCoverage: withinCoverage);
+
+    await _upsertUserRecord(
+      id: id,
+      fullName: fullName,
+      email: email,
+      phone: phone,
+      onboardingComplete: true,
+    );
+
+    final trimmedEmail = email?.trim();
+    final dbEmail =
+        (trimmedEmail == null || trimmedEmail.isEmpty) ? null : trimmedEmail;
+
+    try {
+      await uploadProfileJson(
+        id: id,
+        profileData: {
+          'id': id,
+          'name': fullName,
+          'email': dbEmail ?? '',
+          'phone': phone,
+          'address': {
+            'flat': address['flat'] ?? '',
+            'street': address['street'] ?? '',
+            'city': address['city'] ?? '',
+            'pincode': address['pincode'] ?? '',
+          },
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+      );
+    } catch (_) {}
+
+    pendingOnboardingFullName = null;
+    pendingOnboardingEmail = null;
+  }
+
+  /// Coverage radius (in km) within which an address is considered serviceable
+  /// by a hub.
+  static const double coverageRadiusKm = 50.0;
+
+  /// Determine whether the given coordinates fall within the coverage range of
+  /// any known hub. Returns `true` when serviceable, `false` when out of range.
+  /// Defaults to `true` when hub data can't be resolved so we never block an
+  /// established user by mistake.
+  static Future<bool> isPointWithinCoverage(double lat, double lng) async {
+    try {
+      final List<dynamic> hubs =
+          await client.from('hubs').select('latitude, longitude');
+      if (hubs.isEmpty) return true;
+
+      double minDistance = double.infinity;
+      for (final hub in hubs) {
+        final hubLat = double.tryParse(hub['latitude']?.toString() ?? '');
+        final hubLng = double.tryParse(hub['longitude']?.toString() ?? '');
+        if (hubLat == null || hubLng == null) continue;
+        if (hubLat == 0.0 && hubLng == 0.0) continue;
+        final distance = _haversineKm(lat, lng, hubLat, hubLng);
+        if (distance < minDistance) minDistance = distance;
+      }
+
+      if (minDistance == double.infinity) return true;
+      return minDistance <= coverageRadiusKm;
+    } catch (e) {
+      // ignore: avoid_print
+      print('Warning: Failed to evaluate coverage: $e');
+      return true;
+    }
+  }
+
+  static double _haversineKm(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const p = 0.017453292519943295; // pi / 180
+    final a = 0.5 -
+        cos((lat2 - lat1) * p) / 2 +
+        cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p)) / 2;
+    return 12742 * asin(sqrt(a)); // 2 * R; R = 6371 km
   }
 
   /// Create a profile record in the database for the user.
@@ -262,21 +431,12 @@ class SupabaseService {
     String? phone,
   }) async {
     try {
-      final resolvedEmail = (email ?? currentUserEmail).trim();
-      final String? dbEmail = resolvedEmail.isEmpty ? null : resolvedEmail;
-
-      String? dbPhone = phone;
-      if (dbPhone != null && dbPhone.trim().isEmpty) {
-        dbPhone = null;
-      }
-
-      await client.from('users').upsert({
-        'id': id,
-        'full_name': fullName,
-        'email': dbEmail,
-        'phone': dbPhone,
-        'updated_at': DateTime.now().toIso8601String(),
-      });
+      await _upsertUserRecord(
+        id: id,
+        fullName: fullName,
+        email: email ?? currentUserEmail,
+        phone: phone,
+      );
     } catch (e) {
       // ignore: avoid_print
       print('Error creating profile: $e');
@@ -573,10 +733,12 @@ class SupabaseService {
   /// Sign out the current authenticated user session.
   static Future<void> signOut() async {
     try {
-      // We use local sign out to guarantee the local session is cleared instantly and reliably
-      await client.auth.signOut(scope: SignOutScope.local);
+      // Local sign-out clears the session immediately without waiting on the network.
+      await client.auth
+          .signOut(scope: SignOutScope.local)
+          .timeout(const Duration(seconds: 3));
     } catch (_) {
-      // ignore
+      // Best-effort logout; navigation should still proceed even if this stalls.
     }
   }
 
@@ -630,8 +792,6 @@ class SupabaseService {
     required String fullName,
     required String email,
     String? phone,
-    required String primaryReason,
-    required List<dynamic> members,
     required Map<String, dynamic> address,
   }) async {
     try {
@@ -641,14 +801,13 @@ class SupabaseService {
       }
 
       // 1. Update users table
-      await client.from('users').upsert({
-        'id': id,
-        'full_name': fullName,
-        'email': email,
-        'phone': dbPhone,
-        'onboarding_complete': true,
-        'updated_at': DateTime.now().toIso8601String(),
-      });
+      await _upsertUserRecord(
+        id: id,
+        fullName: fullName,
+        email: email,
+        phone: dbPhone,
+        onboardingComplete: true,
+      );
 
       // 2. Resolve Nearest Hub ID from address
       String? hubId;
@@ -704,26 +863,6 @@ class SupabaseService {
         'is_primary': true,
         'zone_verified': true,
       });
-
-      // 4. Update household members under care
-      // Delete old members for consistency
-      await client.from('household_members').delete().eq('user_id', id);
-
-      if (members.isNotEmpty) {
-        final membersToInsert = members.map((m) {
-          final age = m['age'] as int? ?? 0;
-          final dob = DateTime.now().subtract(Duration(days: age * 365)).toIso8601String().substring(0, 10);
-          return {
-            'user_id': id,
-            'name': m['name'] ?? '',
-            'relationship': m['role'] ?? '',
-            'date_of_birth': dob,
-            'primary_service_need': mapReasonToServicePillar(primaryReason),
-          };
-        }).toList();
-
-        await client.from('household_members').insert(membersToInsert);
-      }
     } catch (e) {
       // ignore: avoid_print
       print('Error saving user profile: $e');
@@ -735,30 +874,48 @@ class SupabaseService {
   static Future<void> saveAddressOnly({
     required String id,
     required Map<String, dynamic> address,
+    bool? withinCoverage,
   }) async {
     try {
       // 1. Resolve Nearest Hub ID from address
       String? hubId;
+      // Whether the address actually falls within a hub's coverage zone.
+      // Prefer an explicit geo-based result from the caller; otherwise fall
+      // back to a name-based match against the available hubs.
+      bool matchedHub = false;
       try {
         final hubsList = await client.from('hubs').select('id, name');
         if (hubsList.isNotEmpty) {
           final addressText = '${address['street']} ${address['city']}'.toLowerCase();
-          final matchingHub = hubsList.firstWhere(
-            (h) {
-              final hubName = (h['name'] as String).split(' ').first.toLowerCase();
-              if (hubName == 'brahmapur' && (addressText.contains('berhampur') || addressText.contains('brahmapur'))) {
-                return true;
-              }
-              return addressText.contains(hubName);
-            },
-            orElse: () => hubsList.first,
-          );
-          hubId = matchingHub['id'] as String?;
+          Map<String, dynamic>? matchingHub;
+          for (final h in hubsList) {
+            final hubName = (h['name'] as String).split(' ').first.toLowerCase();
+            final isMatch =
+                (hubName == 'brahmapur' &&
+                    (addressText.contains('berhampur') ||
+                        addressText.contains('brahmapur'))) ||
+                addressText.contains(hubName);
+            if (isMatch) {
+              matchingHub = Map<String, dynamic>.from(h);
+              break;
+            }
+          }
+          if (matchingHub != null) {
+            hubId = matchingHub['id'] as String?;
+            matchedHub = true;
+          } else {
+            // No coverage: keep a hub reference for downstream fallbacks but
+            // mark the zone as unverified.
+            hubId = hubsList.first['id'] as String?;
+            matchedHub = false;
+          }
         }
       } catch (e) {
         // ignore: avoid_print
         print('Warning: Failed to resolve hub: $e');
       }
+
+      final bool zoneVerified = withinCoverage ?? matchedHub;
 
       // Set all existing addresses to non-primary first
       try {
@@ -777,7 +934,7 @@ class SupabaseService {
         'city': address['city'] ?? '',
         'pin_code': address['pincode'] ?? '',
         'is_primary': true,
-        'zone_verified': true,
+        'zone_verified': zoneVerified,
       });
 
       // 3. Update legacy profile JSON by downloading, updating address, and re-uploading
@@ -802,7 +959,7 @@ class SupabaseService {
     }
   }
 
-  /// Fetch user profile details by querying users, addresses, and household_members
+  /// Fetch user profile details by querying users and addresses
   static Future<Map<String, dynamic>?> getUserProfile(String userId) async {
     try {
       final userResponse = await client
@@ -815,16 +972,11 @@ class SupabaseService {
 
       final addressResponse = await client
           .from('addresses')
-          .select('flat, street, city, pin_code')
+          .select('flat, street, city, pin_code, zone_verified')
           .eq('user_id', userId)
           .eq('is_primary', true)
           .limit(1)
           .maybeSingle();
-
-      final membersResponse = await client
-          .from('household_members')
-          .select('id, name, relationship, date_of_birth, primary_service_need')
-          .eq('user_id', userId);
 
       final profile = {
         'name': userResponse['full_name'],
@@ -843,29 +995,16 @@ class SupabaseService {
           'street': addressResponse['street'],
           'city': addressResponse['city'],
           'pincode': addressResponse['pin_code'],
+          'zone_verified': addressResponse['zone_verified'] ?? true,
         };
       }
 
-      profile['household_members'] = membersResponse.map((m) {
-        int age = 0;
-        if (m['date_of_birth'] != null) {
-          final dob = DateTime.tryParse(m['date_of_birth'] as String);
-          if (dob != null) {
-            age = (DateTime.now().difference(dob).inDays / 365).floor();
-          }
+      try {
+        final jsonProfile = await downloadProfileJson(userId);
+        if (jsonProfile != null && jsonProfile['primary_reason'] != null) {
+          profile['primary_reason'] = jsonProfile['primary_reason'];
         }
-        return {
-          'id': m['id'],
-          'name': m['name'],
-          'role': m['relationship'],
-          'age': age,
-          'dob': m['date_of_birth'],
-        };
-      }).toList();
-      
-      if (membersResponse.isNotEmpty) {
-        profile['primary_reason'] = _mapServicePillarToReason(membersResponse.first['primary_service_need'] as String? ?? '');
-      }
+      } catch (_) {}
 
       return profile;
     } catch (e) {
@@ -888,7 +1027,6 @@ class SupabaseService {
     required bool preferSameProfessional,
     required int totalAmount,
     String? paymentId,
-    String? householdMemberId,
     String? careNotes,
   }) async {
     // 1. Fetch primary address for the user
@@ -963,19 +1101,7 @@ class SupabaseService {
       finalHubId = '00000000-0000-0000-0000-000000000000';
     }
 
-    // 2. Fetch household member if not provided
-    String? finalMemberId = householdMemberId;
-    if (finalMemberId == null || finalMemberId.isEmpty) {
-      final memberRes = await client
-          .from('household_members')
-          .select('id')
-          .eq('user_id', userId)
-          .limit(1)
-          .maybeSingle();
-      finalMemberId = memberRes?['id'] as String?;
-    }
-
-    // 3. Resolve professional ID
+    // 2. Resolve professional ID
     String? professionalId;
     if (selectedProfessionalName.isNotEmpty) {
       try {
@@ -1063,7 +1189,6 @@ class SupabaseService {
 
     final metadata = {
       'user_id': userId,
-      'household_member_id': finalMemberId,
       'address_id': addressId,
       'total_amount': totalAmount,
       'is_recurring': isRecurring,

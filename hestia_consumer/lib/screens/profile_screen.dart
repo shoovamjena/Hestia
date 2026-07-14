@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/colors.dart';
+import '../services/notifications_state.dart';
 import '../services/supabase_service.dart';
 import 'landing_screen.dart';
 import 'search_location_screen.dart';
@@ -21,7 +22,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _phone = '';
   bool _isPhoneVerified = false;
   String _primaryReason = 'New mother';
-  List<dynamic> _members = [];
   Map<String, dynamic> _address = {
     'flat': '',
     'street': '',
@@ -63,7 +63,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               _phone = profileMap['phone'] ?? _phone;
               _isPhoneVerified = profileMap['phone_verified'] == true || SupabaseService.isPhoneVerified();
               _primaryReason = profileMap['primary_reason'] ?? _primaryReason;
-              _members = profileMap['household_members'] ?? [];
               if (profileMap['address'] != null) {
                 _address = Map<String, dynamic>.from(profileMap['address']);
               }
@@ -90,22 +89,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return parts[0][0].toUpperCase();
   }
 
-  String _getEmojiForAge(int age) {
-    if (age <= 2) return '👶';
-    if (age <= 12) return '🧒';
-    if (age <= 19) return '🧑';
-    if (age <= 59) return '🧑';
-    return '👵';
-  }
-
-  Color _getColorForAge(int age) {
-    if (age <= 2) return const Color(0xFFFFE6CC);
-    if (age <= 12) return const Color(0xFFE1F5FE);
-    if (age <= 19) return const Color(0xFFEDE7F6);
-    if (age <= 59) return const Color(0xFFFCE4EC);
-    return const Color(0xFFE4F1D8);
-  }
-
   Future<void> _saveProfileChanges() async {
     final user = SupabaseService.currentUser;
     if (user == null) return;
@@ -124,8 +107,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         fullName: _name,
         email: _email,
         phone: _phone,
-        primaryReason: _primaryReason,
-        members: _members,
         address: _address,
       );
 
@@ -135,7 +116,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'email': _email,
         'phone': _phone,
         'primary_reason': _primaryReason,
-        'household_members': _members,
         'address': _address,
         'updated_at': DateTime.now().toIso8601String(),
       };
@@ -482,172 +462,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  void _showAddMemberDialog() {
-    final nameController = TextEditingController();
-    final ageController = TextEditingController();
-    String? selectedRole = 'Post-Delivery Care';
-    final formKey = GlobalKey<FormState>();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: HestiaColors.background,
-              surfaceTintColor: Colors.transparent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: const Text(
-                'Add Household Member',
-                style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
-              ),
-              content: Form(
-                key: formKey,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'MEMBER NAME',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
-                      ),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: nameController,
-                        decoration: InputDecoration(
-                          hintText: 'e.g. Meera',
-                          filled: true,
-                          fillColor: Colors.grey.shade100,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                          ),
-                        ),
-                        validator: (val) => val == null || val.trim().isEmpty ? 'Enter name' : null,
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'AGE (YEARS)',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
-                      ),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: ageController,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          hintText: 'e.g. 68',
-                          filled: true,
-                          fillColor: Colors.grey.shade100,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                          ),
-                        ),
-                        validator: (val) {
-                          if (val == null || val.trim().isEmpty) return 'Enter age';
-                          final age = int.tryParse(val);
-                          if (age == null || age < 0) return 'Enter valid age';
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'SERVICE PREFERRED',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
-                      ),
-                      const SizedBox(height: 6),
-                      DropdownButtonFormField<String>(
-                        initialValue: selectedRole,
-                        hint: const Text('Select service preferred'),
-                        decoration: InputDecoration(
-                          filled: true,
-                          fillColor: Colors.grey.shade100,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                          ),
-                        ),
-                        items: [
-                          'Post-Delivery Care',
-                          'Mobility Support',
-                          'Elder Care',
-                          'Babysitting',
-                          'Other',
-                        ].map((val) => DropdownMenuItem(
-                          value: val,
-                          child: Text(val),
-                        )).toList(),
-                        onChanged: (val) {
-                          setDialogState(() {
-                            selectedRole = val;
-                          });
-                        },
-                        validator: (val) => val == null ? 'Select service preferred' : null,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HestiaColors.primary,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: () {
-                    if (formKey.currentState!.validate()) {
-                      final age = int.parse(ageController.text);
-                      setState(() {
-                        _members.add({
-                          'name': nameController.text.trim(),
-                          'age': age,
-                          'role': selectedRole ?? 'Other',
-                        });
-                      });
-                      Navigator.pop(context);
-                      _saveProfileChanges();
-                    }
-                  },
-                  child: const Text('Add'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
   void _showChangeReasonDialog() {
     showDialog(
       context: context,
@@ -687,10 +501,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Future<void> _performLogout() async {
+    if (!mounted) return;
+
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: Center(
+          child: CircularProgressIndicator(color: HestiaColors.primary),
+        ),
+      ),
+    );
+
+    try {
+      NotificationsState.instance.disposeSubscription();
+      await SupabaseService.signOut();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to logout: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      if (mounted && rootNavigator.canPop()) {
+        rootNavigator.pop();
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LandingScreen()),
+      (route) => false,
+    );
+  }
+
   void _showLogoutConfirmationDialog() {
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           backgroundColor: HestiaColors.background,
           surfaceTintColor: Colors.transparent,
@@ -705,7 +561,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
             ),
             ElevatedButton(
@@ -714,32 +570,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: () async {
-                Navigator.pop(context); // Close dialog
-                showDialog(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (context) => const Center(
-                    child: CircularProgressIndicator(color: HestiaColors.primary),
-                  ),
-                );
-                try {
-                  await SupabaseService.signOut();
-                  if (context.mounted) {
-                    Navigator.pop(context); // Close loading indicator
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (context) => const LandingScreen()),
-                      (route) => false,
-                    );
-                  }
-                } catch (e) {
-                  if (context.mounted) {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to logout: $e'), backgroundColor: Colors.redAccent),
-                    );
-                  }
-                }
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _performLogout();
               },
               child: const Text('Logout'),
             ),
@@ -942,107 +775,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             const SizedBox(height: 12),
                             _buildProfileCard([
                               _buildDetailRow(Icons.health_and_safety_outlined, 'Service Preferred', _primaryReason),
-                              const SizedBox(height: 20),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Expanded(
-                                    child: Text(
-                                      'Household Members under Care',
-                                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  GestureDetector(
-                                    onTap: _showAddMemberDialog,
-                                    child: const Text(
-                                      '+ Add Member',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.bold,
-                                        color: HestiaColors.primary,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              if (_members.isEmpty)
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 8),
-                                  child: Text(
-                                    'No members added yet.',
-                                    style: TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Colors.grey),
-                                  ),
-                                )
-                              else
-                                ListView.separated(
-                                  shrinkWrap: true,
-                                  physics: const NeverScrollableScrollPhysics(),
-                                  itemCount: _members.length,
-                                  separatorBuilder: (context, index) => const SizedBox(height: 10),
-                                  itemBuilder: (context, index) {
-                                    final member = _members[index];
-                                    final name = member['name'] ?? '';
-                                    final age = member['age'] as int? ?? 0;
-                                    final role = member['role'] ?? '';
-                                    return Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey.shade50,
-                                        borderRadius: BorderRadius.circular(14),
-                                        border: Border.all(color: Colors.grey.shade200, width: 0.8),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Container(
-                                            width: 44,
-                                            height: 44,
-                                            decoration: BoxDecoration(
-                                              color: _getColorForAge(age),
-                                              borderRadius: BorderRadius.circular(10),
-                                            ),
-                                            alignment: Alignment.center,
-                                            child: Text(
-                                              _getEmojiForAge(age),
-                                              style: const TextStyle(fontSize: 16),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  name,
-                                                  style: const TextStyle(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: HestiaColors.textDark,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 2),
-                                                Text(
-                                                  'Service Preferred: $role • ${age > 0 ? '$age yrs' : 'Newborn'}',
-                                                  style: const TextStyle(fontSize: 12, color: Colors.grey),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          IconButton(
-                                            icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent, size: 20),
-                                            onPressed: () {
-                                              setState(() {
-                                                _members.removeAt(index);
-                                              });
-                                              _saveProfileChanges();
-                                            },
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                  },
-                                ),
                             ]),
 
                             const SizedBox(height: 36),

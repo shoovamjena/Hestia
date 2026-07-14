@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -196,6 +195,10 @@ class _OtpScreenState extends State<OtpScreen> {
       return;
     }
 
+    // Dismiss the keyboard so the loading overlay covers the full screen
+    // instead of just the region above the keyboard.
+    FocusScope.of(context).unfocus();
+
     setState(() => _isVerifying = true);
     try {
       if (widget.verificationType == OtpVerificationType.phoneSms) {
@@ -300,421 +303,273 @@ class _OtpScreenState extends State<OtpScreen> {
     super.dispose();
   }
 
-  String get _subtitlePrefix {
+  String get _displayContact {
+    if (widget.verificationType == OtpVerificationType.phoneSms) {
+      final digits = widget.contactInfo.replaceAll(RegExp(r'\D'), '');
+      final local = digits.startsWith('91') ? digits.substring(2) : digits;
+      if (local.length == 10) {
+        return '+91 ${local.substring(0, 5)} ${local.substring(5)}';
+      }
+      return widget.contactInfo;
+    }
+    return widget.contactInfo;
+  }
+
+  String get _instructionText {
     switch (widget.verificationType) {
       case OtpVerificationType.phoneSms:
-        return 'We sent a $_otpLength-digit code to\n';
+        return 'Enter the OTP sent to';
       case OtpVerificationType.emailSignUp:
-        return 'We sent a $_otpLength-digit verification code to\n';
       case OtpVerificationType.emailSignIn:
-        return 'We sent a $_otpLength-digit sign-in code to\n';
+        return 'Enter the OTP sent to';
     }
   }
 
-  String get _titleText {
-    switch (widget.verificationType) {
-      case OtpVerificationType.phoneSms:
-        return 'Verify OTP';
-      case OtpVerificationType.emailSignUp:
-      case OtpVerificationType.emailSignIn:
-        return 'Verify Email';
+  String get _resendLabel {
+    final prefix = widget.verificationType == OtpVerificationType.phoneSms
+        ? 'Resend SMS'
+        : 'Resend email';
+    if (_canResend) return prefix;
+    return '$prefix in ${_secondsRemaining}s';
+  }
+
+  void _checkAutoVerify() {
+    final otp = _controllers.map((c) => c.text).join();
+    if (otp.length == _otpLength && !_isVerifying) {
+      _verifyOtp();
     }
   }
 
-  IconData get _headerIcon {
-    switch (widget.verificationType) {
-      case OtpVerificationType.phoneSms:
-        return Icons.sms_outlined;
-      case OtpVerificationType.emailSignUp:
-      case OtpVerificationType.emailSignIn:
-        return Icons.mark_email_read_outlined;
+  void _handleOtpChanged(int index, String value) {
+    if (value.length > 1) {
+      final cleanValue = value.replaceAll(RegExp(r'\D'), '');
+      final isPaste = value.length > 2;
+
+      if (isPaste) {
+        for (var i = 0; i < _otpLength; i++) {
+          final valueIndex = i - index;
+          if (valueIndex >= 0 && valueIndex < cleanValue.length) {
+            _controllers[i].text = cleanValue[valueIndex];
+          }
+        }
+        var lastFilledIndex = index + cleanValue.length - 1;
+        if (lastFilledIndex >= _otpLength) {
+          lastFilledIndex = _otpLength - 1;
+        }
+        if (lastFilledIndex < _otpLength - 1) {
+          _focusNodes[lastFilledIndex + 1].requestFocus();
+        } else {
+          _focusNodes[lastFilledIndex].unfocus();
+        }
+        _checkAutoVerify();
+        return;
+      }
+
+      final newChar = value.startsWith(_controllers[index].text)
+          ? value.substring(value.length - 1)
+          : value.substring(0, 1);
+
+      _controllers[index].text = newChar;
+      _controllers[index].selection = TextSelection.fromPosition(
+        TextPosition(offset: newChar.length),
+      );
+
+      if (index < _otpLength - 1) {
+        _focusNodes[index + 1].requestFocus();
+      } else {
+        _focusNodes[index].unfocus();
+      }
+      _checkAutoVerify();
+      return;
+    }
+
+    if (value.isNotEmpty) {
+      if (index < _otpLength - 1) {
+        _focusNodes[index + 1].requestFocus();
+      } else {
+        _focusNodes[index].unfocus();
+      }
+      _checkAutoVerify();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    String timerText = "0:${_secondsRemaining.toString().padLeft(2, '0')}";
-    // Calculate box size based on digit count
-    final double boxSize = _otpLength == 6 ? 46.0 : 68.0;
-    final double fontSize = _otpLength == 6 ? 20.0 : 24.0;
-
-    return Container(
-      color: const Color(0xFF5E3D1D),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: SafeArea(
-          child: SingleChildScrollView(
-            physics: const ClampingScrollPhysics(),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+    return Scaffold(
+      backgroundColor: HestiaColors.appBackground,
+      resizeToAvoidBottomInset: false,
+      body: Stack(
+        children: [
+          SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
               child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header Row: Back Button and Hestia Title
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            width: 1.0,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.arrow_back),
+                        color: HestiaColors.textDark,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 40,
+                          minHeight: 40,
+                        ),
+                      ),
+                      const Expanded(
+                        child: Text(
+                          'OTP verification',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: HestiaColors.textDark,
                           ),
                         ),
-                        child: const Icon(
-                          Icons.chevron_left,
-                          color: Colors.white,
-                          size: 28,
-                        ),
                       ),
-                    ),
-                    const Text(
-                      'Hestia',
-                      style: TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 40),
-                  ],
-                ),
-                
-                const SizedBox(height: 40),
-  
-                // Icon badge
-                Container(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Icon(
-                    _headerIcon,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-  
-                const SizedBox(height: 20),
-                
-                // Title and Subtitle
-                Text(
-                  _titleText,
-                  style: const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                RichText(
-                  text: TextSpan(
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.white.withValues(alpha: 0.85),
-                      height: 1.4,
-                    ),
-                    children: [
-                      TextSpan(text: _subtitlePrefix),
-                      TextSpan(
-                        text: widget.contactInfo,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
+                      const SizedBox(width: 40),
                     ],
                   ),
-                ),
-                if (widget.verificationType == OtpVerificationType.phoneSms) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3), width: 1.0),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, color: Colors.orangeAccent, size: 20),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            widget.contactInfo.endsWith('8144684265')
-                                ? 'Twilio Sandbox: SMS OTP will be sent to your registered sandbox number.'
-                                : 'Twilio Sandbox: SMS will not be sent to this number. Use "123456" as the OTP bypass code.',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12.5,
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ],
+                  const SizedBox(height: 32),
+                  Text(
+                    _instructionText,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: HestiaColors.textDark,
+                      height: 1.3,
                     ),
                   ),
-                ] else if (widget.verificationType == OtpVerificationType.emailSignUp || widget.verificationType == OtpVerificationType.emailSignIn) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange.withValues(alpha: 0.3), width: 1.0),
+                  const SizedBox(height: 4),
+                  Text(
+                    _displayContact,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: HestiaColors.textDark,
+                      height: 1.3,
                     ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, color: Colors.orangeAccent, size: 20),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: const Text(
-                            'Sandbox Mode: If you do not receive the email OTP, use "123456" as the bypass code.',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12.5,
-                              height: 1.4,
+                  ),
+                  const SizedBox(height: 28),
+                  Row(
+                    children: List.generate(_otpLength, (index) {
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          right: index < _otpLength - 1 ? 10 : 0,
+                        ),
+                        child: SizedBox(
+                          width: 48,
+                          height: 52,
+                          child: KeyboardListener(
+                            focusNode: FocusNode(skipTraversal: true),
+                            onKeyEvent: (event) {
+                              if (event is KeyDownEvent &&
+                                  event.logicalKey ==
+                                      LogicalKeyboardKey.backspace &&
+                                  _controllers[index].text.isEmpty &&
+                                  index > 0) {
+                                _controllers[index - 1].clear();
+                                _focusNodes[index - 1].requestFocus();
+                              }
+                            },
+                            child: TextFormField(
+                              controller: _controllers[index],
+                              focusNode: _focusNodes[index],
+                              textAlign: TextAlign.center,
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w700,
+                                color: HestiaColors.textDark,
+                              ),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                              decoration: InputDecoration(
+                                filled: true,
+                                fillColor: HestiaColors.inputBackground,
+                                counterText: '',
+                                contentPadding: EdgeInsets.zero,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF2B2B2B),
+                                    width: 1.2,
+                                  ),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF2B2B2B),
+                                    width: 1.2,
+                                  ),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(
+                                    color: HestiaColors.primary,
+                                    width: 1.5,
+                                  ),
+                                ),
+                              ),
+                              onChanged: (value) =>
+                                  _handleOtpChanged(index, value),
                             ),
                           ),
                         ),
-                      ],
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 20),
+                  GestureDetector(
+                    onTap: _canResend ? _resendOtp : null,
+                    child: Text(
+                      _resendLabel,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: _canResend
+                            ? HestiaColors.primary
+                            : const Color(0xFF8A8A8A),
+                      ),
                     ),
                   ),
                 ],
-              
-              const SizedBox(height: 40),
-              
-              // Glassmorphic Card Container
-              ClipRRect(
-                borderRadius: BorderRadius.circular(24),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 18.0, sigmaY: 18.0),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 28.0),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(24),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.18),
-                        width: 1.5,
+              ),
+            ),
+          ),
+          if (_isVerifying)
+            Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: 0.45),
+                child: const Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: Colors.white,
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 20,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // OTP Digit Inputs
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: List.generate(_otpLength, (index) {
-                            return SizedBox(
-                              width: boxSize,
-                              height: boxSize,
-                              child: KeyboardListener(
-                                focusNode: FocusNode(skipTraversal: true),
-                                onKeyEvent: (event) {
-                                  if (event is KeyDownEvent && 
-                                      event.logicalKey == LogicalKeyboardKey.backspace && 
-                                      _controllers[index].text.isEmpty && 
-                                      index > 0) {
-                                    _controllers[index - 1].clear();
-                                    _focusNodes[index - 1].requestFocus();
-                                  }
-                                },
-                                child: TextFormField(
-                                  controller: _controllers[index],
-                                  focusNode: _focusNodes[index],
-                                  textAlign: TextAlign.center,
-                                  keyboardType: TextInputType.number,
-                                  style: TextStyle(
-                                    fontSize: fontSize,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                  inputFormatters: [
-                                    FilteringTextInputFormatter.digitsOnly,
-                                  ],
-                                  decoration: InputDecoration(
-                                    filled: true,
-                                    fillColor: Colors.white.withValues(alpha: 0.12),
-                                    counterText: '',
-                                    contentPadding: EdgeInsets.zero,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.25), width: 1.2),
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.25), width: 1.2),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: const BorderSide(color: Colors.white, width: 1.5),
-                                    ),
-                                  ),
-                                  onChanged: (value) {
-                                    if (value.length > 1) {
-                                      String cleanValue = value.replaceAll(RegExp(r'\D'), '');
-                                      bool isPaste = value.length > 2;
-
-                                      if (isPaste) {
-                                        // Distribute the characters across controllers starting from index
-                                        for (int i = 0; i < _otpLength; i++) {
-                                          int valueIndex = i - index;
-                                          if (valueIndex >= 0 && valueIndex < cleanValue.length) {
-                                            _controllers[i].text = cleanValue[valueIndex];
-                                          }
-                                        }
-                                        // Focus the last filled box or unfocus
-                                        int lastFilledIndex = index + cleanValue.length - 1;
-                                        if (lastFilledIndex >= _otpLength) {
-                                          lastFilledIndex = _otpLength - 1;
-                                        }
-                                        if (lastFilledIndex < _otpLength - 1) {
-                                          _focusNodes[lastFilledIndex + 1].requestFocus();
-                                        } else {
-                                          _focusNodes[lastFilledIndex].unfocus();
-                                        }
-                                        return;
-                                      } else {
-                                        // This is typing a digit in a box that already has a digit (overwrite)
-                                        // Extract the new character
-                                        String newChar = "";
-                                        if (value.startsWith(_controllers[index].text)) {
-                                          newChar = value.substring(value.length - 1);
-                                        } else {
-                                          newChar = value.substring(0, 1);
-                                        }
-
-                                        _controllers[index].text = newChar;
-                                        _controllers[index].selection = TextSelection.fromPosition(
-                                          TextPosition(offset: newChar.length),
-                                        );
-
-                                        if (index < _otpLength - 1) {
-                                          _focusNodes[index + 1].requestFocus();
-                                        } else {
-                                          _focusNodes[index].unfocus();
-                                        }
-                                        return;
-                                      }
-                                    }
-
-                                    if (value.isNotEmpty) {
-                                      if (index < _otpLength - 1) {
-                                        _focusNodes[index + 1].requestFocus();
-                                      } else {
-                                        _focusNodes[index].unfocus();
-                                      }
-                                    }
-                                  },
-                                ),
-                              ),
-                            );
-                          }),
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Resend Countdown Timer
-                        Center(
-                          child: Text(
-                            _canResend ? 'Resend OTP available' : 'Resend OTP in $timerText',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: _canResend ? Colors.white : Colors.white.withValues(alpha: 0.9),
-                            ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 36),
-                        
-                        // Verify Button
-                        SizedBox(
-                          width: double.infinity,
-                          height: 56,
-                          child: ElevatedButton(
-                            onPressed: _isVerifying ? null : _verifyOtp,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color.fromARGB(255, 48, 32, 21),
-                              foregroundColor: HestiaColors.buttonText,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              elevation: 0,
-                            ),
-                            child: _isVerifying
-                                ? const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 2.5,
-                                    ),
-                                  )
-                                : const Text(
-                                    'Verify & Continue',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 24),
-                        
-                        // Didn't receive? Resend
-                        Center(
-                          child: GestureDetector(
-                            onTap: _canResend ? _resendOtp : null,
-                            child: RichText(
-                              text: TextSpan(
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  color: Colors.white,
-                                ),
-                                children: [
-                                  const TextSpan(text: "Didn't receive? "),
-                                  TextSpan(
-                                    text: 'Resend',
-                                    style: TextStyle(
-                                      color: _canResend ? Colors.white : Colors.white.withValues(alpha: 0.6),
-                                      fontWeight: FontWeight.bold,
-                                      decoration: _canResend ? TextDecoration.underline : TextDecoration.none,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                    SizedBox(height: 20),
+                    Text(
+                      'Please wait...',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
-            ],
-          ),
-        ),
-       ),
+            ),
+        ],
       ),
-    ),
-   );
+    );
   }
 }

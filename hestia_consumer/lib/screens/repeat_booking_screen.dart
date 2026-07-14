@@ -236,120 +236,132 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 252, 252, 252),
-      body: Container(
-        color: HestiaColors.appBackground,
-        child: SafeArea(
-          child: Column(
-            children: [
-              // ── App Bar ─────────────────────────────────────────────
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0, vertical: 12.0),
-                child: Row(
+      backgroundColor: HestiaColors.mutedGrey,
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0xFF5E3D1D),
+                  HestiaColors.primary,
+                  Color(0xFF8B6B4A),
+                ],
+                stops: [0.0, 0.55, 1.0],
+              ),
+            ),
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Back Button (Circular)
+                    Row(
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            HapticFeedback.lightImpact();
+                            Navigator.pop(context);
+                          },
+                          child: Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.14),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.22),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.chevron_left,
+                              color: Colors.white,
+                              size: 24,
+                            ),
+                          ),
+                        ),
+                        const Expanded(
+                          child: Center(
+                            child: Text(
+                              'Recurring Booking',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 44),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    _sectionTitle('Select Frequency', light: true),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Days when you want this service for',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     GestureDetector(
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                        Navigator.pop(context);
-                      },
+                      onTap: _showFrequencySheet,
                       child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: const BoxDecoration(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 16,
+                        ),
+                        decoration: BoxDecoration(
                           color: Colors.white,
-                          shape: BoxShape.circle,
+                          borderRadius: BorderRadius.circular(14),
                           boxShadow: [
                             BoxShadow(
-                              color: Color(0x14000000),
-                              blurRadius: 5,
-                              offset: Offset(0, 5),
+                              color: Colors.black.withValues(alpha: 0.08),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
                             ),
                           ],
                         ),
-                        child: const Icon(
-                          Icons.chevron_left,
-                          color: HestiaColors.primary,
-                          size: 24,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _selectedFrequency,
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  color: HestiaColors.textDark,
+                                ),
+                              ),
+                            ),
+                            const Icon(
+                              Icons.chevron_right,
+                              color: HestiaColors.primary,
+                              size: 22,
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    // Title (Centered)
-                    Expanded(
-                      child: Center(
-                        child: const Text(
-                          'Recurring Booking',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
-                    // Balance spacer
-                    const SizedBox(width: 44),
                   ],
                 ),
               ),
+            ),
+          ),
 
-              // ── Scrollable Body ──────────────────────────────────────
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 20.0, vertical: 12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // ── Select Frequency ───────────────────────────
-                      _sectionTitle('Select Frequency', light: true),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Days when you want this service for',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.white60,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      GestureDetector(
-                        onTap: _showFrequencySheet,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 16),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(14),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x14000000),
-                                blurRadius: 6,
-                                offset: Offset(0, 2),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  _selectedFrequency,
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    color: HestiaColors.textDark,
-                                  ),
-                                ),
-                              ),
-                              const Icon(Icons.chevron_right,
-                                  color: HestiaColors.primary, size: 22),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 24),
-
-                      // ── How long? ──────────────────────────────────
+          Expanded(
+            child: Container(
+              color: HestiaColors.mutedGrey,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                       _sectionTitle('How long do you want this service for?'),
                       const SizedBox(height: 12),
                       Container(
@@ -628,75 +640,69 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                   ),
                 ),
               ),
+            ),
 
-              // ── Continue booking button ────────────────────────────
-              SafeArea(
-                child: Padding(
-                  padding:
-                      const EdgeInsets.fromLTRB(20.0, 8.0, 20.0, 20.0),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: double.infinity,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: _canContinue
-                          ? HestiaColors.primary
-                          : const Color(0xFFCFCFCF),
-                      borderRadius: BorderRadius.circular(28),
-                      boxShadow: _canContinue
-                          ? [
-                              BoxShadow(
-                                color: HestiaColors.primary
-                                    .withValues(alpha: 0.3),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
-                              ),
-                            ]
-                          : [],
-                    ),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(28),
-                        onTap: _canContinue
-                            ? () {
-                                HapticFeedback.lightImpact();
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (context) =>
-                                        ChooseProfessionalScreen(
-                                      serviceTitle: widget.serviceTitle,
-                                      selectedDate: _startDate,
-                                      selectedTime: _selectedTimeSlot!,
-                                      selectedDuration: _selectedDurationLabel,
-                                      repeatOption: _selectedFrequency,
-                                      endsAfter:
-                                          _formatMonthDay(_endDate),
-                                      preferSameProfessional: true,
-                                    ),
-                                  ),
-                                );
-                              }
-                            : null,
-                        child: const Center(
-                          child: Text(
-                            'Continue booking',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.2,
-                            ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20.0, 8.0, 20.0, 20.0),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: double.infinity,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: _canContinue
+                      ? HestiaColors.primary
+                      : const Color(0xFFCFCFCF),
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: _canContinue
+                      ? [
+                          BoxShadow(
+                            color: HestiaColors.primary.withValues(alpha: 0.3),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
                           ),
+                        ]
+                      : [],
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(28),
+                    onTap: _canContinue
+                        ? () {
+                            HapticFeedback.lightImpact();
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => ChooseProfessionalScreen(
+                                  serviceTitle: widget.serviceTitle,
+                                  selectedDate: _startDate,
+                                  selectedTime: _selectedTimeSlot!,
+                                  selectedDuration: _selectedDurationLabel,
+                                  repeatOption: _selectedFrequency,
+                                  endsAfter: _formatMonthDay(_endDate),
+                                  preferSameProfessional: true,
+                                ),
+                              ),
+                            );
+                          }
+                        : null,
+                    child: const Center(
+                      child: Text(
+                        'Continue booking',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.2,
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
-import 'register_screen.dart';
 
 class OnboardingSlide {
   final String imagePath;
@@ -55,11 +54,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         curve: Curves.easeInOut,
       );
     } else {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => const RegisterScreen(isSignIn: false),
-        ),
-      );
+      // Onboarding finished: return to the landing screen where the user
+      // signs in with their phone number via OTP.
+      Navigator.of(context).pop();
     }
   }
 

@@ -2,16 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 
 import '../config/mapbox_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../services/location_acquisition_service.dart';
 import 'home_screen.dart';
 
 class ConfirmLocationScreen extends StatefulWidget {
@@ -19,8 +18,6 @@ class ConfirmLocationScreen extends StatefulWidget {
   final Map<String, dynamic>? initialAddress;
   final LatLng? initialCoords;
   final bool isPostSignInJourney;
-  final String? primaryReason;
-  final List<Map<String, dynamic>>? members;
   final bool useCurrentLocation;
 
   const ConfirmLocationScreen({
@@ -29,8 +26,6 @@ class ConfirmLocationScreen extends StatefulWidget {
     this.initialAddress,
     this.initialCoords,
     this.isPostSignInJourney = false,
-    this.primaryReason,
-    this.members,
     this.useCurrentLocation = false,
   });
 
@@ -43,6 +38,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   final _streetController = TextEditingController();
   final _cityController = TextEditingController();
   final _pincodeController = TextEditingController();
+  final _searchController = TextEditingController();
 
   final MapController _mapController = MapController();
 
@@ -51,9 +47,6 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   Timer? _debounceTimer;
 
   // Hub coverage state
-  String _hubName = 'Koramangala Hub';
-  String _hubZone = 'South Bengaluru hub';
-  String _hubEst = 'Within 24 hrs';
   bool _isWithinCoverage = true;
   List<Map<String, dynamic>> _dbHubs = [];
 
@@ -88,22 +81,6 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     },
   ];
 
-  bool _isMapEnlarged = false;
-
-  final List<String> _localCities = const [
-    'Bengaluru',
-    'New Delhi',
-    'Delhi',
-    'Mumbai',
-    'Bhubaneswar',
-    'Cuttack',
-    'Puri',
-    'Kolkata',
-    'Chennai',
-    'Hyderabad',
-    'Pune',
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -115,29 +92,29 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
       _flatController.text = widget.initialAddress!['flat'] ?? '';
       _streetController.text = widget.initialAddress!['street'] ?? '';
       _cityController.text = widget.initialAddress!['city'] ?? '';
-      _pincodeController.text = widget.initialAddress!['pincode'] ?? widget.initialAddress!['pin_code'] ?? '';
+      _pincodeController.text = widget.initialAddress!['pincode'] ??
+          widget.initialAddress!['pin_code'] ??
+          '';
     }
 
     if (widget.initialCoords != null) {
       _currentMapPosition = widget.initialCoords!;
       _isLoading = false;
-      _updateNearestHub(_currentMapPosition.latitude, _currentMapPosition.longitude);
+      _updateNearestHub(
+        _currentMapPosition.latitude,
+        _currentMapPosition.longitude,
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         try {
           _mapController.move(_currentMapPosition, 16.0);
         } catch (_) {}
       });
-    } else if (widget.useCurrentLocation) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _initCurrentLocation();
-      });
     } else {
-      // Default fallback is to request/use current location
+      // Default is to request/use current location
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _initCurrentLocation();
       });
     }
-
   }
 
   @override
@@ -146,18 +123,16 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     _streetController.dispose();
     _cityController.dispose();
     _pincodeController.dispose();
+    _searchController.dispose();
     _debounceTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _geocodeAddressFields() async {
-    final street = _streetController.text.trim();
-    final city = _cityController.text.trim();
-    final pincode = _pincodeController.text.trim();
+  Future<void> _searchAndMove(String query) async {
+    if (query.trim().isEmpty) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _isLoading = true);
 
-    if (street.isEmpty && city.isEmpty && pincode.isEmpty) return;
-
-    final query = "$street, $city $pincode".trim();
     LatLng? point;
     if (MapboxConfig.accessToken.isNotEmpty) {
       point = await _geocodeAddressFieldsMapbox(query);
@@ -165,25 +140,45 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     point ??= await _geocodeAddressFieldsOSM(query);
 
     if (point != null) {
-      final actualPoint = point;
-      if (mounted) {
-        setState(() {
-          _currentMapPosition = actualPoint;
-        });
-      }
-      _updateNearestHub(actualPoint.latitude, actualPoint.longitude);
-      try {
-        _mapController.move(actualPoint, 16.0);
-      } catch (_) {}
-      await _reverseGeocodeCenter(actualPoint.latitude, actualPoint.longitude);
+      _updateLocation(point);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No results found for that search.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
+
+    if (mounted) setState(() => _isLoading = false);
+  }
+
+  String get _addressTitle {
+    final street = _streetController.text.trim();
+    final city = _cityController.text.trim();
+    if (street.isNotEmpty) {
+      return street.split(',').first.trim();
+    }
+    return city.isNotEmpty ? city : 'Selected location';
+  }
+
+  String get _addressSubtitle {
+    final parts = [
+      _flatController.text.trim(),
+      _streetController.text.trim(),
+      _cityController.text.trim(),
+      _pincodeController.text.trim(),
+    ].where((e) => e.isNotEmpty).toList();
+    return parts.isEmpty
+        ? 'Move the map to pick your exact address'
+        : parts.join(', ');
   }
 
   Future<LatLng?> _geocodeAddressFieldsMapbox(String query) async {
     try {
       final client = HttpClient();
       final uri = Uri.parse(
-        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json?access_token=${MapboxConfig.accessToken}&limit=1&country=in'
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json?access_token=${MapboxConfig.accessToken}&limit=1&country=in',
       );
       final request = await client.getUrl(uri);
       final response = await request.close();
@@ -211,7 +206,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     try {
       final client = HttpClient();
       final uri = Uri.parse(
-        'https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1'
+        'https://nominatim.openstreetmap.org/search?q=${Uri.encodeComponent(query)}&format=json&limit=1',
       );
       final request = await client.getUrl(uri);
       request.headers.set('User-Agent', 'hestia_consumer_app');
@@ -238,32 +233,11 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     });
 
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        _useFallbackDefault("Location services are disabled.");
+      final position = await LocationAcquisitionService.acquirePosition();
+      if (position == null) {
+        _useFallbackDefault("Could not obtain a GPS fix.");
         return;
       }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          _useFallbackDefault("Location permission denied.");
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        _useFallbackDefault("Location permission permanently denied.");
-        return;
-      }
-
-      Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 5),
-        ),
-      );
 
       final point = LatLng(position.latitude, position.longitude);
       if (mounted) {
@@ -302,13 +276,19 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   }
 
   Future<void> _goToCurrentLocation() async {
+    setState(() => _isLoading = true);
     try {
-      Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 5),
-        ),
-      );
+      final position = await LocationAcquisitionService.acquirePosition();
+      if (position == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Couldn't get your current location. Try again."),
+            ),
+          );
+        }
+        return;
+      }
       final point = LatLng(position.latitude, position.longitude);
       try {
         _mapController.move(point, 16.0);
@@ -323,6 +303,8 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
           SnackBar(content: Text("Could not resolve current location: $e")),
         );
       }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -337,7 +319,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     if (!hasGesture) return;
 
     if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
-    _debounceTimer = Timer(const Duration(milliseconds: 1000), () {
+    _debounceTimer = Timer(const Duration(milliseconds: 800), () {
       _reverseGeocodeCenter(center.latitude, center.longitude);
     });
   }
@@ -362,7 +344,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     }
     addressData ??= await _reverseGeocodeOSM(lat, lng);
 
-    // Fallback to nearest mock hub location details if online geocoding fails or returns empty/null
+    // Fallback to nearest mock hub location details if online geocoding fails
     if (addressData == null) {
       final nearest = _findNearestLocation(lat, lng);
       addressData = {
@@ -380,24 +362,23 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
         final city = addressData['city'] ?? '';
         final pincode = addressData['pincode'] ?? '';
 
-        // Don't fill flat number field with general address text
-        if (_flatController.text.isEmpty && flat.isNotEmpty) {
-          _flatController.text = flat;
-        }
+        _flatController.text = flat;
         _streetController.text = street;
         _cityController.text = city;
         _pincodeController.text = pincode;
-
       });
       _updateNearestHub(lat, lng);
     }
   }
 
-  Future<Map<String, String>?> _reverseGeocodeMapbox(double lat, double lng) async {
+  Future<Map<String, String>?> _reverseGeocodeMapbox(
+    double lat,
+    double lng,
+  ) async {
     try {
       final client = HttpClient();
       final uri = Uri.parse(
-        'https://api.mapbox.com/geocoding/v5/mapbox.places/$lng,$lat.json?access_token=${MapboxConfig.accessToken}&limit=1&country=in'
+        'https://api.mapbox.com/geocoding/v5/mapbox.places/$lng,$lat.json?access_token=${MapboxConfig.accessToken}&limit=1&country=in',
       );
       final request = await client.getUrl(uri);
       final response = await request.close();
@@ -422,7 +403,8 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
                 pincode = item['text'] as String? ?? pincode;
               } else if (id.startsWith('place')) {
                 city = item['text'] as String? ?? city;
-              } else if (id.startsWith('locality') || id.startsWith('neighborhood')) {
+              } else if (id.startsWith('locality') ||
+                  id.startsWith('neighborhood')) {
                 street = "${item['text']}, $street";
               }
             }
@@ -451,7 +433,7 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     try {
       final client = HttpClient();
       final uri = Uri.parse(
-        'https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&addressdetails=1'
+        'https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&addressdetails=1',
       );
       final request = await client.getUrl(uri);
       request.headers.set('User-Agent', 'hestia_consumer_app');
@@ -461,11 +443,17 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
         final data = json.decode(jsonString);
         final address = data['address'] as Map<String, dynamic>?;
         if (address != null) {
-          final road = address['road'] as String? ?? address['suburb'] as String? ?? '';
+          final road =
+              address['road'] as String? ?? address['suburb'] as String? ?? '';
           final suburb = address['suburb'] as String? ?? '';
-          final city = address['city'] as String? ?? address['town'] as String? ?? address['state'] as String? ?? 'Bengaluru';
+          final city = address['city'] as String? ??
+              address['town'] as String? ??
+              address['state'] as String? ??
+              'Bengaluru';
           final pincode = address['postcode'] as String? ?? '';
-          final street = road.isNotEmpty ? (suburb.isNotEmpty && suburb != road ? "$suburb, $road" : road) : suburb;
+          final street = road.isNotEmpty
+              ? (suburb.isNotEmpty && suburb != road ? "$suburb, $road" : road)
+              : suburb;
           return {
             'flat': '',
             'street': street,
@@ -531,7 +519,8 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     Map<String, dynamic> nearest = mockLocations[0];
     double minDistance = double.infinity;
     for (final loc in mockLocations) {
-      final double d = (loc['lat'] - lat) * (loc['lat'] - lat) + (loc['lng'] - lng) * (loc['lng'] - lng);
+      final double d = (loc['lat'] - lat) * (loc['lat'] - lat) +
+          (loc['lng'] - lng) * (loc['lng'] - lng);
       if (d < minDistance) {
         minDistance = d;
         nearest = loc;
@@ -542,9 +531,9 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
 
   double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
     const p = 0.017453292519943295; // Math.PI / 180
-    final a = 0.5 - cos((lat2 - lat1) * p)/2 + 
-          cos(lat1 * p) * cos(lat2 * p) * 
-          (1 - cos((lon2 - lon1) * p))/2;
+    final a = 0.5 -
+        cos((lat2 - lat1) * p) / 2 +
+        cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p)) / 2;
     return 12742 * asin(sqrt(a)); // 2 * R; R = 6371 km
   }
 
@@ -552,25 +541,24 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     final hubs = _dbHubs.isNotEmpty ? _dbHubs : _mockHubs;
     if (hubs.isEmpty) return;
 
-    Map<String, dynamic> nearest = hubs[0];
     double minDistance = double.infinity;
 
     for (final hub in hubs) {
-      final double hubLat = double.tryParse(hub['latitude']?.toString() ?? hub['lat']?.toString() ?? '') ?? 0.0;
-      final double hubLng = double.tryParse(hub['longitude']?.toString() ?? hub['lng']?.toString() ?? '') ?? 0.0;
-      
+      final double hubLat = double.tryParse(
+              hub['latitude']?.toString() ?? hub['lat']?.toString() ?? '') ??
+          0.0;
+      final double hubLng = double.tryParse(
+              hub['longitude']?.toString() ?? hub['lng']?.toString() ?? '') ??
+          0.0;
+
       final distance = _calculateDistance(lat, lng, hubLat, hubLng);
       if (distance < minDistance) {
         minDistance = distance;
-        nearest = hub;
       }
     }
 
     if (mounted) {
       setState(() {
-        _hubName = nearest['name'] ?? 'Local Hub';
-        _hubZone = nearest['zone'] ?? nearest['address'] ?? 'Local coverage zone';
-        _hubEst = nearest['est'] ?? 'Within 24 hrs';
         _isWithinCoverage = minDistance <= 50.0;
       });
     }
@@ -581,13 +569,13 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
       final List<dynamic> response = await SupabaseService.client
           .from('hubs')
           .select('id, name, latitude, longitude, address');
-      
+
       final List<Map<String, dynamic>> fetchedHubs = [];
       for (final item in response) {
         final hub = Map<String, dynamic>.from(item);
         double? lat = double.tryParse(hub['latitude']?.toString() ?? '');
         double? lng = double.tryParse(hub['longitude']?.toString() ?? '');
-        
+
         if (lat == null || lng == null || (lat == 0.0 && lng == 0.0)) {
           final query = hub['address']?.toString() ?? hub['name']?.toString() ?? '';
           if (query.isNotEmpty) {
@@ -608,7 +596,10 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
       if (mounted) {
         setState(() {
           _dbHubs = fetchedHubs;
-          _updateNearestHub(_currentMapPosition.latitude, _currentMapPosition.longitude);
+          _updateNearestHub(
+            _currentMapPosition.latitude,
+            _currentMapPosition.longitude,
+          );
         });
       }
     } catch (e) {
@@ -619,12 +610,13 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
   Future<void> _saveAddress() async {
     final street = _streetController.text.trim();
     final city = _cityController.text.trim();
-    final pincode = _pincodeController.text.trim();
 
-    if (street.isEmpty || city.isEmpty || pincode.isEmpty) {
+    if (street.isEmpty && city.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("Street, City, and Pincode are required fields."),
+          content: Text(
+            "We couldn't detect this address. Move the map or search again.",
+          ),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -649,47 +641,30 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
           'pincode': _pincodeController.text.trim(),
         };
         if (widget.isPostSignInJourney) {
-          final fullName = user.userMetadata?['full_name'] ?? 'User';
+          final fullName = SupabaseService.pendingOnboardingFullName ??
+              user.userMetadata?['full_name']?.toString() ??
+              'User';
+          final email = SupabaseService.pendingOnboardingEmail ??
+              user.userMetadata?['email']?.toString() ??
+              user.email ??
+              '';
           final phone = SupabaseService.currentUserPhone.isNotEmpty
               ? SupabaseService.currentUserPhone
               : null;
-          final email = user.userMetadata?['email'] ?? user.email ?? '';
 
-          await SupabaseService.saveUserProfile(
+          await SupabaseService.completeOnboarding(
             id: user.id,
             fullName: fullName,
             email: email,
             phone: phone,
-            primaryReason: widget.primaryReason ?? 'New mother',
-            members: widget.members ?? [],
             address: addressData,
-          );
-
-          final profileData = {
-            'id': user.id,
-            'name': fullName,
-            'email': email,
-            'phone': phone,
-            'primary_reason': widget.primaryReason ?? 'New mother',
-            'household_members': widget.members ?? [],
-            'address': addressData,
-            'updated_at': DateTime.now().toIso8601String(),
-          };
-          await SupabaseService.uploadProfileJson(
-            id: user.id,
-            profileData: profileData,
-          );
-
-          await SupabaseService.createProfile(
-            id: user.id,
-            fullName: fullName,
-            email: email,
-            phone: phone,
+            withinCoverage: _isWithinCoverage,
           );
         } else {
           await SupabaseService.saveAddressOnly(
             id: user.id,
             address: addressData,
+            withinCoverage: _isWithinCoverage,
           );
         }
       }
@@ -717,492 +692,334 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
     }
   }
 
-  Future<Iterable<String>> searchCities(String query) async {
-    if (query.isEmpty) return const Iterable<String>.empty();
-
-    final localMatches = _localCities.where((city) => city.toLowerCase().contains(query.toLowerCase())).toList();
-
-    if (MapboxConfig.accessToken.isNotEmpty) {
-      try {
-        final client = HttpClient();
-        final uri = Uri.parse(
-          'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(query)}.json?access_token=${MapboxConfig.accessToken}&types=place&country=in&limit=5'
-        );
-        final request = await client.getUrl(uri);
-        final response = await request.close();
-        if (response.statusCode == 200) {
-          final jsonString = await response.transform(utf8.decoder).join();
-          final data = json.decode(jsonString);
-          final features = data['features'] as List?;
-          if (features != null) {
-            final apiCities = features.map((f) => f['text'] as String? ?? '').where((c) => c.isNotEmpty).toList();
-            for (var city in apiCities) {
-              if (!localMatches.contains(city)) {
-                localMatches.add(city);
-              }
-            }
-          }
-        }
-      } catch (e) {
-        debugPrint("Error fetching city suggestions from Mapbox: $e");
-      }
-    }
-
-    return localMatches.take(5);
-  }
-
   @override
   Widget build(BuildContext context) {
-    const greenAccent = HestiaColors.primary;
-    const textDark = Color(0xFF1E1E1E);
-
-    return Container(
-        color: HestiaColors.appBackground,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back, color: HestiaColors.textDark, size: 24),
-            onPressed: () => Navigator.pop(context),
+    return Scaffold(
+      backgroundColor: HestiaColors.appBackground,
+      appBar: AppBar(
+        backgroundColor: HestiaColors.appBackground,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: HestiaColors.textDark),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          'Confirm your location',
+          style: TextStyle(
+            fontFamily: 'Outfit',
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            color: HestiaColors.textDark,
           ),
-          title: Text(
-            widget.isPostSignInJourney
-                ? 'Confirm address'
-                : (widget.editMode ? 'Edit address' : 'Add address'),
-            style: const TextStyle(
-              fontFamily: 'Outfit',
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: HestiaColors.textDark,
+        ),
+        titleSpacing: 0,
+      ),
+      body: Stack(
+        children: [
+          // Full-screen map
+          Positioned.fill(
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _currentMapPosition,
+                initialZoom: 16.0,
+                onPositionChanged: _onMapPositionChanged,
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: MapboxConfig.accessToken.isNotEmpty
+                      ? 'https://api.mapbox.com/styles/v1/${MapboxConfig.styleId}/tiles/256/{z}/{x}/{y}@2x?access_token=${MapboxConfig.accessToken}'
+                      : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.example.hestia_consumer_app',
+                ),
+              ],
             ),
           ),
-          titleSpacing: 0,
-        ),
-        body: SafeArea(
-          left: false,
-          right: false,
-          child: Stack(
-            children: [
-              SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: Column(
-                  children: [
-                    // Map section with slide animations on toggle - rounded corners map card
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24.0, 8.0, 24.0, 16.0),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(20),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeInOut,
-                          height: _isMapEnlarged ? 550 : 250,
-                          child: Stack(
-                            children: [
-                              FlutterMap(
-                                mapController: _mapController,
-                                options: MapOptions(
-                                  initialCenter: _currentMapPosition,
-                                  initialZoom: 16.0,
-                                  onPositionChanged: _onMapPositionChanged,
-                                  onTap: (tapPosition, point) {
-                                    _updateLocation(point);
-                                  },
-                                ),
-                                children: [
-                                  TileLayer(
-                                    urlTemplate: MapboxConfig.accessToken.isNotEmpty
-                                        ? 'https://api.mapbox.com/styles/v1/${MapboxConfig.styleId}/tiles/256/{z}/{x}/{y}@2x?access_token=${MapboxConfig.accessToken}'
-                                        : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                    userAgentPackageName: 'com.example.hestia_consumer_app',
-                                  ),
-                                ],
-                              ),
-                              // Central marker pin
-                              Align(
-                                alignment: Alignment.center,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 35.0),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF222222),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: const Text(
-                                          "Pin location",
-                                          style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                      CustomPaint(
-                                        size: const Size(8, 4),
-                                        painter: _TrianglePainter(color: const Color(0xFF222222)),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      const Icon(
-                                        Icons.location_on_rounded,
-                                        color: Colors.redAccent,
-                                        size: 38,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              // Tap to set pin indicator (Top-Left)
-                              Positioned(
-                                top: 10,
-                                left: 10,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: Colors.black.withValues(alpha: 0.6),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: const Row(
-                                    children: [
-                                      Icon(Icons.touch_app, color: Colors.white, size: 14),
-                                      SizedBox(width: 4),
-                                      Text(
-                                        'Tap or drag to set pin',
-                                        style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              // Fullscreen expand/collapse button (Top-Right)
-                              Positioned(
-                                top: 10,
-                                right: 10,
-                                child: GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      _isMapEnlarged = !_isMapEnlarged;
-                                    });
-                                  },
-                                  child: Container(
-                                    width: 38,
-                                    height: 38,
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withValues(alpha: 0.6),
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Icon(
-                                      _isMapEnlarged ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
-                                      color: Colors.white,
-                                      size: 22,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              // GPS center button (Bottom-Right)
-                              Positioned(
-                                bottom: 16,
-                                right: 16,
-                                child: GestureDetector(
-                                  onTap: _goToCurrentLocation,
-                                  child: Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.white,
-                                      shape: BoxShape.circle,
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Color(0x1F000000),
-                                          blurRadius: 8,
-                                          offset: Offset(0, 3),
-                                        ),
-                                      ],
-                                    ),
-                                    child: const Icon(
-                                      Icons.my_location,
-                                      color: textDark,
-                                      size: 22,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
 
-                    // Bottom White card with rounded corners for address details - liquid glass themed
-                    ClipRRect(
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5ECE3).withValues(alpha: 0.85), // liquid glass tinted brown
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                            border: Border.all(
-                              color: const Color(0xFFE6D5C5).withValues(alpha: 0.9),
-                              width: 1.5,
+          // Center pin + tooltip (non-interactive)
+          IgnorePointer(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 46),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF222222),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            'Set this as your location',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
                             ),
                           ),
-                          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildInputLabel('FLAT / HOUSE NO.'),
-                              const SizedBox(height: 8),
-                              _buildTextField(_flatController, 'e.g. B-402, Green Orchid Apartments'),
-                              const SizedBox(height: 18),
-
-                              _buildInputLabel('STREET / LOCALITY'),
-                              const SizedBox(height: 8),
-                              _buildTextField(_streetController, 'e.g. Koramangala 4th Block'),
-                              const SizedBox(height: 18),
-
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        _buildInputLabel('CITY'),
-                                        const SizedBox(height: 8),
-                                        _CityAutocompleteField(
-                                          controller: _cityController,
-                                          placeholder: 'e.g. Bengaluru',
-                                          onSearch: (query) => searchCities(query),
-                                          onSelected: () {},
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        _buildInputLabel('PIN CODE'),
-                                        const SizedBox(height: 8),
-                                        _buildTextField(_pincodeController, 'e.g. 560034', keyboardType: TextInputType.number),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              Center(
-                                child: TextButton.icon(
-                                  onPressed: () {
-                                    FocusScope.of(context).unfocus();
-                                    _geocodeAddressFields();
-                                  },
-                                  icon: const Icon(Icons.sync_rounded, size: 18, color: HestiaColors.primary),
-                                  label: const Text(
-                                    'Sync Address to Map Pin',
-                                    style: TextStyle(
-                                      fontFamily: 'Outfit',
-                                      fontWeight: FontWeight.w600,
-                                      color: HestiaColors.primary,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                  style: TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                    backgroundColor: HestiaColors.primary.withValues(alpha: 0.08),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      side: BorderSide(color: HestiaColors.primary.withValues(alpha: 0.15)),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 24),
-
-                              // Coverage / Out of coverage banner
-                              _isWithinCoverage
-                                  ? Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFF2FAE9).withValues(alpha: 0.9),
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(color: const Color(0xFFB7DDA3)),
-                                      ),
-                                      child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const Icon(Icons.check_circle_rounded, color: Color(0xFF8BC34A), size: 20),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  'Covered by $_hubName',
-                                                  style: const TextStyle(
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Color(0xFF3E5C2C),
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  'Great news! Your address falls within our $_hubZone coverage zone. Services available: $_hubEst.',
-                                                  style: const TextStyle(
-                                                    fontSize: 13,
-                                                    color: Color(0xFF3E5C2C),
-                                                    height: 1.4,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    )
-                                  : Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFFDE8E8).withValues(alpha: 0.9),
-                                        borderRadius: BorderRadius.circular(16),
-                                        border: Border.all(color: const Color(0xFFE8B7B7)),
-                                      ),
-                                       child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          const Icon(Icons.info_outline, color: Colors.redAccent, size: 20),
-                                          const SizedBox(width: 10),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                const Text(
-                                                  'Out of Coverage',
-                                                  style: TextStyle(
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Color(0xFF8B3E3E),
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                 const Text(
-                                                   'We are not available in your position now and will expand soon',
-                                                   style: TextStyle(
-                                                     fontSize: 13,
-                                                     color: Color(0xFF8B3E3E),
-                                                     height: 1.4,
-                                                   ),
-                                                 ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-
-                              const SizedBox(height: 24),
-
-                              // Confirm / Save button
-                              SizedBox(
-                                width: double.infinity,
-                                height: 56,
-                                child: ElevatedButton(
-                                  onPressed: _isWithinCoverage ? _saveAddress : null,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: greenAccent,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    elevation: 0,
-                                  ),
-                                  child: Text(
-                                    widget.isPostSignInJourney
-                                        ? 'Confirm & Continue'
-                                        : (widget.editMode ? 'Update Address' : 'Save Address'),
-                                    style: const TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
+                          Text(
+                            _addressTitle,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
+                        ],
                       ),
+                    ),
+                    CustomPaint(
+                      size: const Size(14, 7),
+                      painter: _TrianglePainter(color: const Color(0xFF222222)),
+                    ),
+                    const SizedBox(height: 2),
+                    const Icon(
+                      Icons.location_on,
+                      color: HestiaColors.primary,
+                      size: 44,
                     ),
                   ],
                 ),
               ),
-              if (_isLoading)
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.black12,
-                    child: const Center(
-                      child: CircularProgressIndicator(color: greenAccent),
+            ),
+          ),
+
+          // Search bar (top)
+          Positioned(
+            top: 8,
+            left: 16,
+            right: 16,
+            child: Material(
+              elevation: 3,
+              borderRadius: BorderRadius.circular(14),
+              shadowColor: Colors.black26,
+              child: TextField(
+                controller: _searchController,
+                textInputAction: TextInputAction.search,
+                onSubmitted: _searchAndMove,
+                decoration: InputDecoration(
+                  hintText: 'Search locality, sector, area',
+                  hintStyle: TextStyle(color: Colors.grey.shade500),
+                  prefixIcon: const Icon(
+                    Icons.search,
+                    color: HestiaColors.primary,
+                  ),
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(
+                      color: HestiaColors.primary,
+                      width: 1.4,
                     ),
                   ),
                 ),
-            ],
+              ),
+            ),
           ),
-        ),
-      ),
-    );
-  }
 
-  Widget _buildInputLabel(String label) {
-    return Text(
-      label,
-      style: const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.bold,
-        color: Color(0xFF6F4E37),
-        letterSpacing: 1.2,
-      ),
-    );
-  }
+          // Bottom: "Go to current location" pill + address card
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Material(
+                    elevation: 3,
+                    borderRadius: BorderRadius.circular(30),
+                    shadowColor: Colors.black26,
+                    child: InkWell(
+                      onTap: _goToCurrentLocation,
+                      borderRadius: BorderRadius.circular(30),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.my_location,
+                              color: HestiaColors.primary,
+                              size: 18,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Go to current location',
+                              style: TextStyle(
+                                color: HestiaColors.primary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Container(
+                  width: double.infinity,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x1F000000),
+                        blurRadius: 16,
+                        offset: Offset(0, -4),
+                      ),
+                    ],
+                  ),
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.location_on,
+                                color: HestiaColors.primary,
+                                size: 26,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _addressTitle,
+                                      style: const TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w800,
+                                        color: HestiaColors.textDark,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _addressSubtitle,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: HestiaColors.textMedium,
+                                        height: 1.3,
+                                      ),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (!_isWithinCoverage) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFDF3E6),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Row(
+                                children: [
+                                  Icon(
+                                    Icons.info_outline,
+                                    color: Color(0xFFB4791F),
+                                    size: 18,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      "We're not live here yet, but you can still save this address.",
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF8A5A12),
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 54,
+                            child: ElevatedButton(
+                              onPressed: _saveAddress,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: HestiaColors.primary,
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              child: Text(
+                                widget.isPostSignInJourney
+                                    ? 'Confirm & Continue'
+                                    : (widget.editMode
+                                        ? 'Update location'
+                                        : 'Confirm location'),
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
 
-  Widget _buildTextField(
-    TextEditingController controller,
-    String hint, {
-    TextInputType keyboardType = TextInputType.text,
-  }) {
-    return TextFormField(
-      controller: controller,
-      keyboardType: keyboardType,
-      style: const TextStyle(
-        color: Color(0xFF1E1E1E),
-        fontSize: 16,
-        fontWeight: FontWeight.w500,
-      ),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(
-          color: Colors.grey.shade500,
-          fontWeight: FontWeight.normal,
-          fontSize: 15,
-        ),
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.6),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: const Color(0xFFE6D5C5).withValues(alpha: 0.5)),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: const Color(0xFFE6D5C5).withValues(alpha: 0.5)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-        ),
+          if (_isLoading)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black12,
+                child: Center(
+                  child: CircularProgressIndicator(color: HestiaColors.primary),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1226,125 +1043,4 @@ class _TrianglePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _CityAutocompleteField extends StatefulWidget {
-  final TextEditingController controller;
-  final String placeholder;
-  final FutureOr<Iterable<String>> Function(String) onSearch;
-  final VoidCallback onSelected;
-
-  const _CityAutocompleteField({
-    required this.controller,
-    required this.placeholder,
-    required this.onSearch,
-    required this.onSelected,
-  });
-
-  @override
-  State<_CityAutocompleteField> createState() => _CityAutocompleteFieldState();
-}
-
-class _CityAutocompleteFieldState extends State<_CityAutocompleteField> {
-  final FocusNode _focusNode = FocusNode();
-
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
-  void dispose() {
-    _focusNode.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return RawAutocomplete<String>(
-      textEditingController: widget.controller,
-      focusNode: _focusNode,
-      optionsBuilder: (TextEditingValue textEditingValue) {
-        return widget.onSearch(textEditingValue.text);
-      },
-      onSelected: (String selection) {
-        widget.controller.text = selection;
-        widget.onSelected();
-      },
-      fieldViewBuilder: (context, textController, focusNode, onFieldSubmitted) {
-        return TextFormField(
-          controller: textController,
-          focusNode: focusNode,
-          onFieldSubmitted: (value) => onFieldSubmitted(),
-          style: const TextStyle(
-            color: Color(0xFF1E1E1E),
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-          ),
-          decoration: InputDecoration(
-            hintText: widget.placeholder,
-            hintStyle: TextStyle(
-              color: Colors.grey.shade400,
-              fontWeight: FontWeight.normal,
-              fontSize: 15,
-            ),
-            filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.6),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: const Color(0xFFE6D5C5).withValues(alpha: 0.5)),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: const Color(0xFFE6D5C5).withValues(alpha: 0.5)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-            ),
-          ),
-        );
-      },
-      optionsViewBuilder: (context, onSelected, options) {
-        return Align(
-          alignment: Alignment.topLeft,
-          child: Material(
-            elevation: 6.0,
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            child: Container(
-              width: 170,
-              constraints: const BoxConstraints(maxHeight: 200),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade200, width: 0.5),
-              ),
-              child: ListView.builder(
-                padding: EdgeInsets.zero,
-                shrinkWrap: true,
-                itemCount: options.length,
-                itemBuilder: (BuildContext context, int index) {
-                  final String option = options.elementAt(index);
-                  return InkWell(
-                    onTap: () {
-                      onSelected(option);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                      child: Text(
-                        option,
-                        style: const TextStyle(color: Color(0xFF1E1E1E), fontSize: 14),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
 }

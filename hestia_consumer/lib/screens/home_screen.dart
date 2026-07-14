@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:ui';
 import 'dart:math';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
@@ -12,6 +11,8 @@ import 'session_detail_screen.dart';
 import 'receipt_screen.dart';
 import 'search_location_screen.dart';
 import 'profile_screen.dart';
+import 'pronto_money_screen.dart';
+import 'refer_and_earn_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -27,12 +28,12 @@ class _HomeScreenState extends State<HomeScreen>
   String _userInitials = 'U';
   String _location = 'Set Address';
   String _primaryReason = '';
-  List<dynamic> _members = [];
   String _email = '';
   String _phone = '';
   int _currentTabIndex = 0;
   int _oldTabIndex = 0;
-  bool _showAllServices = false;
+  bool _isWithinCoverage = true;
+  bool _notifyRequested = false;
   final Map<String, int> _serviceMinutes = {};
   Map<String, dynamic>? _activeBooking;
   List<Map<String, dynamic>> _recentSessions = [];
@@ -254,11 +255,12 @@ class _HomeScreenState extends State<HomeScreen>
             _email = profileData['email'] ?? _email;
             _phone = profileData['phone'] ?? _phone;
             _primaryReason = profileData['primary_reason'] ?? '';
-            _members = profileData['household_members'] ?? [];
             if (profileData['address'] != null) {
               final street = profileData['address']['street'] ?? '';
               final city = profileData['address']['city'] ?? '';
               _location = street.isNotEmpty ? '$street · $city' : city;
+              _isWithinCoverage =
+                  profileData['address']['zone_verified'] != false;
             }
           }
           _activeBooking = activeBooking;
@@ -321,14 +323,6 @@ class _HomeScreenState extends State<HomeScreen>
     if (hour > 12) hour -= 12;
     if (hour == 0) hour = 12;
     return '$hour:$minute $period';
-  }
-
-  String _getEmojiForAge(int age) {
-    if (age <= 2) return '👶';
-    if (age <= 12) return '🧒';
-    if (age <= 19) return '🧑';
-    if (age <= 59) return '🧑';
-    return '👵';
   }
 
   _AvailableSlot _getRecentAvailableSlot() {
@@ -428,186 +422,195 @@ class _HomeScreenState extends State<HomeScreen>
       width: 130,
       height: double.infinity,
       child: GestureDetector(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => ServiceDetailScreen(
-                serviceKey: label,
-                initialServicesMap: Map<String, int>.from(_serviceMinutes),
-                onMinutesChanged: (newMinutes) {
-                  setState(() {
-                    if (newMinutes <= 0) {
-                      _serviceMinutes.remove(label);
-                    } else {
-                      _serviceMinutes[label] = newMinutes;
-                    }
-                  });
-                },
+        onTap: () => _openServiceDetail(label),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFFEEE6DE)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
               ),
-            ),
-          );
-        },
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(13),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.42),
-                    Colors.white.withValues(alpha: 0.18),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Image area with rating badge
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(15),
+                        ),
+                        child: Container(
+                          color: const Color(0xFFBCA99B),
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.all(4),
+                          child: _buildServiceIconImage(label, size: 88),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.star,
+                              color: Color(0xFFFFB300),
+                              size: 11,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              '$rating ($ratingCount)',
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: HestiaColors.textDark,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.55),
-                  width: 1.2,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
               ),
-              child: Stack(
-                clipBehavior: Clip.hardEdge,
-                children: [
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: _buildServiceIconImage(
-                        label,
-                        fullWidth: true,
-                        imageHeightMultiplier: 5.6,
+              // Text + action area
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: HestiaColors.textDark,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  Positioned.fill(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 7,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: HestiaColors.primary,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.star,
-                                  color: Colors.white,
-                                  size: 9,
-                                ),
-                                const SizedBox(width: 2),
-                                Text(
-                                  rating,
-                                  style: const TextStyle(
-                                    fontSize: 8,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ],
-                            ),
+                    const SizedBox(height: 4),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          displayPrice,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: HestiaColors.textDark,
                           ),
-                          const Spacer(),
-                          Text(
-                            label,
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            displayOriginalPrice,
                             style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: HestiaColors.textDark,
+                              fontSize: 11,
+                              color: Color(0xFF9E9186),
+                              decoration: TextDecoration.lineThrough,
                             ),
-                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          const SizedBox(height: 2),
-                          Row(
-                            children: [
-                              Text(
-                                displayPrice,
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  color: HestiaColors.textDark,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      child: isAdded
+                          ? _buildStepper(label, minutes)
+                          : GestureDetector(
+                              key: const ValueKey('add_btn'),
+                              onTap: () async {
+                                setState(() {
+                                  _serviceMinutes[label] = 30;
+                                });
+                                await Future.delayed(
+                                  const Duration(milliseconds: 300),
+                                );
+                                if (!mounted) return;
+                                _openServiceDetail(label);
+                              },
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 6,
                                 ),
-                              ),
-                              const SizedBox(width: 3),
-                              Flexible(
-                                child: Text(
-                                  displayOriginalPrice,
-                                  style: const TextStyle(
-                                    fontSize: 9,
-                                    color: HestiaColors.textLight,
-                                    decoration: TextDecoration.lineThrough,
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: HestiaColors.primary,
+                                    width: 1.3,
                                   ),
-                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 5),
-                          AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 200),
-                            child: isAdded
-                                ? _buildStepper(label, minutes)
-                                : GestureDetector(
-                                    key: const ValueKey('add_btn'),
-                                    onTap: () {
-                                      setState(() {
-                                        _serviceMinutes[label] = 30;
-                                      });
-                                    },
-                                    child: Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withValues(
-                                          alpha: 0.34,
-                                        ),
-                                        borderRadius: BorderRadius.circular(7),
-                                        border: Border.all(
-                                          color: Colors.white.withValues(
-                                            alpha: 0.65,
-                                          ),
-                                          width: 1.2,
-                                        ),
-                                      ),
-                                      child: const Center(
-                                        child: Text(
-                                          'ADD',
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.bold,
-                                            color: HestiaColors.primary,
-                                            letterSpacing: 0.3,
-                                          ),
-                                        ),
-                                      ),
+                                child: const Center(
+                                  child: Text(
+                                    'ADD',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: HestiaColors.primary,
+                                      letterSpacing: 0.5,
                                     ),
                                   ),
-                          ),
-                        ],
-                      ),
+                                ),
+                              ),
+                            ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
+        ),
+      ),
+    );
+  }
+
+  void _openServiceDetail(String label) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ServiceDetailScreen(
+          serviceKey: label,
+          initialServicesMap: Map<String, int>.from(_serviceMinutes),
+          onMinutesChanged: (newMinutes) {
+            setState(() {
+              if (newMinutes <= 0) {
+                _serviceMinutes.remove(label);
+              } else {
+                _serviceMinutes[label] = newMinutes;
+              }
+            });
+          },
         ),
       ),
     );
@@ -1829,91 +1832,6 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
             ],
           ),
-          if (_members.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            const Divider(color: HestiaColors.primary, height: 1),
-            const SizedBox(height: 12),
-            const Text(
-              'MEMBERS UNDER CARE',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: Colors.black,
-                letterSpacing: 1.0,
-              ),
-            ),
-            const SizedBox(height: 8),
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: _members.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
-              itemBuilder: (context, index) {
-                final member = _members[index];
-                final name = member['name'] ?? '';
-                final age = member['age'] ?? 0;
-                final role = member['role'] ?? '';
-                return Row(
-                  children: [
-                    Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        color: HestiaColors.inputBorder,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        _getEmojiForAge(age),
-                        style: const TextStyle(fontSize: 16),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            name,
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: HestiaColors.primary,
-                            ),
-                          ),
-                          Text(
-                            role,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.black,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: HestiaColors.primary,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        age > 0 ? '$age yrs' : 'Newborn',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ],
         ],
       ),
     );
@@ -1931,601 +1849,607 @@ class _HomeScreenState extends State<HomeScreen>
       case 1:
         return _buildBookingsTab();
       case 2:
-        return const ProfileScreen(showBackButton: false);
+        return ProntoMoneyScreen(
+          showBackButton: true,
+          onBack: () {
+            setState(() {
+              _oldTabIndex = _currentTabIndex;
+              _currentTabIndex = 0;
+            });
+          },
+        );
       default:
         return _buildHomeTab();
     }
+  }
+
+  // Shown on the Home tab when the user's primary address is outside the
+  // coverage range of every hub. Mirrors the "coming soon" experience: a hero
+  // message, a notify CTA, a way to change location, and a preview of the
+  // services that will be available once we reach them.
+  List<Widget> _buildComingSoonContent() {
+    return [
+      const SizedBox(height: 28),
+      Center(
+        child: RichText(
+          textAlign: TextAlign.center,
+          text: const TextSpan(
+            style: TextStyle(
+              fontSize: 34,
+              fontWeight: FontWeight.w900,
+              height: 1.1,
+              letterSpacing: 0.5,
+            ),
+            children: [
+              TextSpan(
+                text: 'WE ARE\nCOMING ',
+                style: TextStyle(color: Color(0xFFBCA99B)),
+              ),
+              TextSpan(
+                text: 'SOON',
+                style: TextStyle(color: HestiaColors.primary),
+              ),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 16),
+      const Center(
+        child: Text(
+          "We're currently live in select areas and expanding quickly. "
+          'Get notified when we are near you!',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 15,
+            height: 1.4,
+            color: HestiaColors.textMedium,
+          ),
+        ),
+      ),
+      const SizedBox(height: 24),
+      Center(
+        child: ElevatedButton.icon(
+          onPressed: () {
+            setState(() => _notifyRequested = true);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  "Thanks! We'll notify you as soon as we're live in your area.",
+                ),
+                backgroundColor: HestiaColors.primary,
+              ),
+            );
+          },
+          icon: Icon(
+            _notifyRequested
+                ? Icons.check_circle_outline
+                : Icons.notifications_active_outlined,
+            size: 20,
+          ),
+          label: Text(_notifyRequested ? "You're on the list" : 'Notify me!'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: HestiaColors.primary,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+            textStyle: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            elevation: 0,
+          ),
+        ),
+      ),
+      const SizedBox(height: 14),
+      Center(
+        child: TextButton(
+          onPressed: () {
+            Navigator.of(context)
+                .push(
+                  MaterialPageRoute(
+                    builder: (context) => const SearchLocationScreen(),
+                  ),
+                )
+                .then((_) => _loadProfileData());
+          },
+          child: const Text(
+            'Change location',
+            style: TextStyle(
+              color: HestiaColors.primary,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              decoration: TextDecoration.underline,
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: 32),
+      const Center(
+        child: Text(
+          'Services we offer',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: Colors.black,
+          ),
+        ),
+      ),
+      const SizedBox(height: 16),
+      _buildServicesGrid(),
+      const SizedBox(
+        height: 120,
+      ),
+    ];
+  }
+
+  Widget _buildServicesGrid({double desiredHeight = 220}) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double totalWidth = constraints.maxWidth;
+        final double columnWidth = (totalWidth - 20.0) / 3;
+        final double aspect = columnWidth / desiredHeight;
+
+        return GridView.count(
+          crossAxisCount: 3,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: aspect,
+          children: _homeServiceCatalog
+              .map(
+                (service) => _serviceTile(
+                  service.label,
+                  service.price,
+                  service.originalPrice,
+                  service.rating,
+                  service.ratingCount,
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildActiveBookingBanner() {
+    final booking = _activeBooking!;
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => TrackingScreen(bookingData: booking),
+          ),
+        );
+      },
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: HestiaColors.primary.withValues(alpha: 0.25),
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0A000000),
+              blurRadius: 10,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 5,
+              height: 88,
+              decoration: const BoxDecoration(
+                color: HestiaColors.primary,
+                borderRadius: BorderRadius.horizontal(
+                  left: Radius.circular(16),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFAF2EB),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.health_and_safety,
+                        color: HestiaColors.primary,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'ACTIVE BOOKING',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: HestiaColors.textAccent,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${booking['title']} · ${_formatBookingDate(booking['scheduled_start'] as DateTime)}',
+                            style: const TextStyle(
+                              color: HestiaColors.textDark,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${booking['caregiver_name']} · ${_formatBookingTime(booking['scheduled_start'] as DateTime)}',
+                            style: const TextStyle(
+                              color: HestiaColors.textMedium,
+                              fontSize: 12,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(
+                      Icons.chevron_right,
+                      color: HestiaColors.primary,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildInCoverageContent() {
+    return [
+      if (_activeBooking != null) ...[
+        _buildActiveBookingBanner(),
+        const SizedBox(height: 24),
+      ],
+      const SizedBox(height: 12),
+      Center(
+        child: RichText(
+          textAlign: TextAlign.center,
+          text: const TextSpan(
+            style: TextStyle(
+              fontSize: 32,
+              fontWeight: FontWeight.w900,
+              height: 1.15,
+              letterSpacing: 0.3,
+            ),
+            children: [
+              TextSpan(
+                text: 'Safe care at\nyour ',
+                style: TextStyle(color: Color(0xFFBCA99B)),
+              ),
+              TextSpan(
+                text: 'doorstep',
+                style: TextStyle(color: HestiaColors.primary),
+              ),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      const Center(
+        child: Text(
+          'Book trusted professionals in minutes.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 15,
+            height: 1.4,
+            color: HestiaColors.textMedium,
+          ),
+        ),
+      ),
+      const SizedBox(height: 28),
+      const Center(
+        child: Text(
+          'Services we offer',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: Colors.black,
+          ),
+        ),
+      ),
+      const SizedBox(height: 16),
+      _buildServicesGrid(),
+      const SizedBox(height: 28),
+      const Text(
+        'Book for Later',
+        style: TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w800,
+          color: Colors.black,
+        ),
+      ),
+      const SizedBox(height: 4),
+      const Text(
+        'Select your slot & stay worry-free',
+        style: TextStyle(
+          fontSize: 14,
+          color: HestiaColors.textMedium,
+        ),
+      ),
+      const SizedBox(height: 12),
+      Row(
+        children: [
+          _bookLaterCard(
+            title: 'Schedule\nBooking',
+            pillText: 'UP TO 50% OFF',
+            illustration: const ClockIllustration(
+              primaryColor: HestiaColors.primary,
+            ),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const ScheduleScreen(
+                    serviceTitle: 'Post-Delivery Care',
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 12),
+          _bookLaterCard(
+            title: 'Recurring\nBooking',
+            pillText: 'UP TO 25% OFF',
+            illustration: const CalendarIllustration(
+              primaryColor: HestiaColors.primary,
+            ),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => RepeatBookingScreen(
+                    serviceTitle: 'Post-Delivery Care',
+                    selectedDate: DateTime.now(),
+                    selectedDuration: '3 hrs',
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+      const SizedBox(height: 120),
+    ];
+  }
+
+  Widget _buildTopAppBar() {
+    final parts = _location.split(' · ');
+    final String primaryLabel =
+        (parts.isNotEmpty && parts.first.trim().isNotEmpty)
+        ? parts.first.trim()
+        : _location;
+
+    return Container(
+      width: double.infinity,
+      color: HestiaColors.primary,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 12, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    Navigator.of(context)
+                        .push(
+                          MaterialPageRoute(
+                            builder: (context) => const SearchLocationScreen(),
+                          ),
+                        )
+                        .then((_) => _loadProfileData());
+                  },
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.location_on,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    primaryLabel,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const Icon(
+                                  Icons.keyboard_arrow_down,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ],
+                            ),
+                            Text(
+                              _location,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.8),
+                                fontSize: 12,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _appBarActionCircle(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const ProntoMoneyScreen(),
+                    ),
+                  );
+                },
+                child: const Icon(
+                  Icons.account_balance_wallet_outlined,
+                  color: HestiaColors.primary,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 10),
+              _appBarActionCircle(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const ReferAndEarnScreen(),
+                    ),
+                  );
+                },
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.center,
+                  children: [
+                    const Icon(
+                      Icons.card_giftcard,
+                      color: HestiaColors.primary,
+                      size: 22,
+                    ),
+                    Positioned(
+                      bottom: -10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        decoration: BoxDecoration(
+                          color: HestiaColors.primary,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white, width: 1),
+                        ),
+                        child: const Text(
+                          '₹100',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              GestureDetector(
+                onTap: () {
+                  Navigator.of(context)
+                      .push(
+                        MaterialPageRoute(
+                          builder: (context) => const ProfileScreen(),
+                        ),
+                      )
+                      .then((_) => _loadProfileData());
+                },
+                child: Container(
+                  width: 44,
+                  height: 44,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF2B2B2B),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _userInitials,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _appBarActionCircle({required Widget child, VoidCallback? onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+        ),
+        alignment: Alignment.center,
+        child: child,
+      ),
+    );
   }
 
   Widget _buildHomeTab() {
     return SingleChildScrollView(
       child: Container(
         color: HestiaColors.appBackground,
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 16.0,
-              vertical: 12.0,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Top bar
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () {
-                          Navigator.of(context)
-                              .push(
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      const SearchLocationScreen(),
-                                ),
-                              )
-                              .then((_) => _loadProfileData());
-                        },
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.location_on,
-                              color: HestiaColors.primary,
-                              size: 14,
-                            ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                _location,
-                                style: const TextStyle(
-                                  color: HestiaColors.textMedium,
-                                  fontSize: 13,
-                                  decoration: TextDecoration.underline,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        GestureDetector(
-                          onTap: () {
-                            Navigator.of(context)
-                                .push(
-                                  MaterialPageRoute(
-                                    builder: (context) => const ProfileScreen(),
-                                  ),
-                                )
-                                .then((_) => _loadProfileData());
-                          },
-                          child: Container(
-                            width: 60,
-                            height: 60,
-                            decoration: const BoxDecoration(
-                              color: Color.fromARGB(255, 73, 46, 27),
-                              shape: BoxShape.circle,
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              _userInitials,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildTopAppBar(),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16.0,
+                vertical: 12.0,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                if (!_isWithinCoverage) ..._buildComingSoonContent(),
 
-                // Active booking card
-                _activeBooking != null
-                    ? GestureDetector(
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  TrackingScreen(bookingData: _activeBooking!),
-                            ),
-                          );
-                        },
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color.fromARGB(255, 65, 42, 27),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: HestiaColors.primary),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x14000000),
-                                blurRadius: 8,
-                                offset: Offset(0, 10),
-                              ),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 56,
-                                height: 56,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Icon(
-                                  Icons.health_and_safety,
-                                  color: HestiaColors.primary,
-                                  size: 28,
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'ACTIVE BOOKING',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: HestiaColors.inputBorder,
-                                        fontWeight: FontWeight.bold,
-                                        letterSpacing: 1.0,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      '${_activeBooking!['title']} · ${_formatBookingDate(_activeBooking!['scheduled_start'] as DateTime)}',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      '${_activeBooking!['caregiver_name']} · ${_formatBookingTime(_activeBooking!['scheduled_start'] as DateTime)}',
-                                      style: const TextStyle(
-                                        color: Colors.white60,
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const Icon(
-                                Icons.chevron_right,
-                                color: HestiaColors.inputBorder,
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    : Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: HestiaColors.primary.withValues(alpha: 0.25),
-                            width: 1.2,
-                          ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x0A000000),
-                              blurRadius: 10,
-                              offset: Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: HestiaColors.primary.withValues(
-                                  alpha: 0.1,
-                                ),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.calendar_today_outlined,
-                                color: HestiaColors.primary,
-                                size: 20,
-                              ),
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: const [
-                                  Text(
-                                    'NO ACTIVE BOOKING',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: HestiaColors.textAccent,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: 1.2,
-                                    ),
-                                  ),
-                                  SizedBox(height: 4),
-                                  Text(
-                                    'No upcoming sessions scheduled',
-                                    style: TextStyle(
-                                      color: HestiaColors.textDark,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 14,
-                                    ),
-                                  ),
-                                  SizedBox(height: 2),
-                                  Text(
-                                    'Select a service below to book a care visit',
-                                    style: TextStyle(
-                                      color: HestiaColors.textMedium,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                const SizedBox(height: 18),
-
-                // Household Care Profile (if data loaded)
-                if (_primaryReason.isNotEmpty || _members.isNotEmpty) ...[
-                  _buildCareProfileSection(),
-                  const SizedBox(height: 18),
-                ],
-
-                // Our Services heading
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Our Services',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.black,
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _showAllServices = !_showAllServices;
-                        });
-                      },
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _showAllServices
-                              ? Colors.white
-                              : HestiaColors.primary,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: HestiaColors.primary,
-                            width: 1.5,
-                          ),
-                        ),
-                        child: Text(
-                          _showAllServices ? 'Show less' : 'See all',
-                          style: TextStyle(
-                            color: _showAllServices
-                                ? HestiaColors.primary
-                                : Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-
-                // Services — single row or 2-row grid depending on _showAllServices
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  switchInCurve: Curves.easeOut,
-                  switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (child, animation) => FadeTransition(
-                    opacity: animation,
-                    child: SizeTransition(
-                      sizeFactor: animation,
-                      alignment: Alignment.topCenter,
-                      child: child,
-                    ),
-                  ),
-                  child: _showAllServices
-                      ? KeyedSubtree(
-                          key: const ValueKey('grid'),
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final double totalWidth = constraints.maxWidth;
-                              final double columnWidth =
-                                  (totalWidth - 20.0) / 3;
-                              final double desiredHeight = 185.0;
-                              final double aspect = columnWidth / desiredHeight;
-
-                              return GridView.count(
-                                crossAxisCount: 3,
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
-                                childAspectRatio: aspect,
-                                children: _homeServiceCatalog
-                                    .map(
-                                      (service) => _serviceTile(
-                                        service.label,
-                                        service.price,
-                                        service.originalPrice,
-                                        service.rating,
-                                        service.ratingCount,
-                                      ),
-                                    )
-                                    .toList(),
-                              );
-                            },
-                          ),
-                        )
-                      : KeyedSubtree(
-                          key: const ValueKey('row'),
-                          child: SizedBox(
-                            height: 185,
-                            child: ListView(
-                              scrollDirection: Axis.horizontal,
-                              physics: const BouncingScrollPhysics(),
-                              children: [
-                                for (
-                                  int i = 0;
-                                  i < _homeServiceCatalog.length;
-                                  i++
-                                ) ...[
-                                  if (i > 0) const SizedBox(width: 10),
-                                  _serviceTile(
-                                    _homeServiceCatalog[i].label,
-                                    _homeServiceCatalog[i].price,
-                                    _homeServiceCatalog[i].originalPrice,
-                                    _homeServiceCatalog[i].rating,
-                                    _homeServiceCatalog[i].ratingCount,
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                ),
-                const SizedBox(height: 18),
-
-                // ── Busy Partners Section ───────────────────
-                const Text(
-                  'Our partners are busy right now',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Schedule & book for later',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: HestiaColors.textMedium,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 200,
-                  child: Builder(
-                    builder: (context) {
-                      final slotInfo = _getRecentAvailableSlot();
-                      return ListView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        children: [
-                          _busyPartnerCard(
-                            nextSlot: slotInfo.displayString,
-                            duration: '0.5 hr',
-                            price: '₹250',
-                            originalPrice: '₹500',
-                            saveAmount: 'Save ₹250',
-                            serviceTitle: 'Post-Delivery Care',
-                            durationMinutes: 30,
-                            initialDate: slotInfo.date,
-                            initialTimeSlot: slotInfo.slot,
-                          ),
-                          _busyPartnerCard(
-                            nextSlot: slotInfo.displayString,
-                            duration: '1 hr',
-                            price: '₹499',
-                            originalPrice: '₹999',
-                            saveAmount: 'Save ₹500',
-                            serviceTitle: 'Post-Delivery Care',
-                            durationMinutes: 60,
-                            initialDate: slotInfo.date,
-                            initialTimeSlot: slotInfo.slot,
-                          ),
-                          _busyPartnerCard(
-                            nextSlot: slotInfo.displayString,
-                            duration: '1.5 hr',
-                            price: '₹749',
-                            originalPrice: '₹1499',
-                            saveAmount: 'Save ₹750',
-                            serviceTitle: 'Post-Delivery Care',
-                            durationMinutes: 90,
-                            initialDate: slotInfo.date,
-                            initialTimeSlot: slotInfo.slot,
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // ── Book for Later Section ──────────────────
-                const Text(
-                  'Book for Later',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Select your slot & stay worry-free',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: HestiaColors.textMedium,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _bookLaterCard(
-                      title: 'Schedule\nBooking',
-                      pillText: 'UP TO 50% OFF',
-                      illustration: const ClockIllustration(
-                        primaryColor: HestiaColors.primary,
-                      ),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => const ScheduleScreen(
-                              serviceTitle: 'Post-Delivery Care',
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    const SizedBox(width: 12),
-                    _bookLaterCard(
-                      title: 'Recurring\nBooking',
-                      pillText: 'UP TO 25% OFF',
-                      illustration: const CalendarIllustration(
-                        primaryColor: HestiaColors.primary,
-                      ),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => RepeatBookingScreen(
-                              serviceTitle: 'Post-Delivery Care',
-                              selectedDate: DateTime.now(),
-                              selectedDuration: '3 hrs',
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-
-                // ── Reliable & Trustworthy Section ──────────
-                const SizedBox(height: 12),
-                const Text(
-                  'Reliable & Trustworthy',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.black,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Ensuring integrity through verified standards',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: HestiaColors.textMedium,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    _trustCard(
-                      title: 'Verified\nProfessionals\nYou Can Trust',
-                      icon: Icons.verified_user_rounded,
-                      gradientColors: [Colors.white, const Color(0xFFF9EFE3)],
-                    ),
-                    const SizedBox(width: 10),
-                    _trustCard(
-                      title: 'Well Trained to\ndeliver great\nservice',
-                      icon: Icons.school_rounded,
-                      gradientColors: [Colors.white, const Color(0xFFFAF2EB)],
-                    ),
-                    const SizedBox(width: 10),
-                    _trustCard(
-                      title:
-                          'Safe, reliable,\nand consistent\nevery single time',
-                      icon: Icons.health_and_safety_rounded,
-                      gradientColors: [Colors.white, const Color(0xFFFFF9F5)],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 32),
-
-                // ── Hestia Brand Footer ─────────────────────
-                Center(
-                  child: Column(
-                    children: [
-                      const Text(
-                        'Safe Care.\nZero Stress.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w900,
-                          color: HestiaColors.primary,
-                          height: 1.25,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'HESTIA',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          color: HestiaColors.primary,
-                          letterSpacing: 3.0,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Trusted by 450k+ families',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: HestiaColors.textMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(
-                  height: 120,
-                ), // Spacer so scrolling content goes behind navbar
+                if (_isWithinCoverage) ..._buildInCoverageContent(),
               ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -2535,6 +2459,12 @@ class _HomeScreenState extends State<HomeScreen>
   Widget build(BuildContext context) {
     _initAnimationController();
     final controller = _navAnimationController!;
+    final bottomInset = MediaQuery.of(context).padding.bottom;
+    final navVisible = _currentTabIndex != 2;
+    // Nav bar: ~74px content + 12px bottom margin, plus gap above it.
+    final cartBottom = _serviceMinutes.isNotEmpty
+        ? (navVisible ? bottomInset + 102 : bottomInset + 24)
+        : -60.0;
 
     return Scaffold(
       extendBody: true,
@@ -2547,7 +2477,7 @@ class _HomeScreenState extends State<HomeScreen>
           AnimatedPositioned(
             duration: const Duration(milliseconds: 350),
             curve: Curves.easeOutBack,
-            bottom: _serviceMinutes.isNotEmpty ? 100 : -60,
+            bottom: cartBottom,
             left: 24,
             right: 24,
             child: AnimatedOpacity(
@@ -2663,116 +2593,117 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         ],
       ),
-      bottomNavigationBar: SafeArea(
+      bottomNavigationBar: _currentTabIndex == 2
+          ? null
+          : SafeArea(
         top: false,
         child: Container(
-          margin: const EdgeInsets.fromLTRB(24, 0, 24, 0),
-
-          child: ClipRRect(
+          margin: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 0),
+          decoration: BoxDecoration(
+            color: HestiaColors.primary,
             borderRadius: BorderRadius.circular(50),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 0),
-                decoration: BoxDecoration(
-                  color: HestiaColors.primary.withValues(alpha: 0.3),
-                ),
-                child: SizedBox(
-                  height: 66,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final double totalWidth = constraints.maxWidth;
-                      final double tabWidth = totalWidth / 3;
+            boxShadow: [
+              BoxShadow(
+                color: HestiaColors.primary.withValues(alpha: 0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: SizedBox(
+            height: 66,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final double totalWidth = constraints.maxWidth;
+                final double tabWidth = totalWidth / 3;
 
-                      return AnimatedBuilder(
-                        animation: controller,
-                        builder: (context, child) {
-                          final double t = controller.value;
-                          final double pillNormalWidth = tabWidth - 8;
+                return AnimatedBuilder(
+                  animation: controller,
+                  builder: (context, child) {
+                    final double t = controller.value;
+                    final double pillNormalWidth = tabWidth - 8;
 
-                          final double centerSource =
-                              (_oldTabIndex + 0.5) * tabWidth;
-                          final double centerTarget =
-                              (_currentTabIndex + 0.5) * tabWidth;
+                    final double centerSource =
+                        (_oldTabIndex + 0.5) * tabWidth;
+                    final double centerTarget =
+                        (_currentTabIndex + 0.5) * tabWidth;
 
-                          double tLeft;
-                          double tRight;
+                    double tLeft;
+                    double tRight;
 
-                          if (_currentTabIndex > _oldTabIndex) {
-                            tRight = CurveTween(
-                              curve: Curves.easeOutQuart,
-                            ).transform(t);
-                            tLeft = CurveTween(
-                              curve: Curves.easeInQuad,
-                            ).transform(t);
-                          } else if (_currentTabIndex < _oldTabIndex) {
-                            tLeft = CurveTween(
-                              curve: Curves.easeOutQuart,
-                            ).transform(t);
-                            tRight = CurveTween(
-                              curve: Curves.easeInQuad,
-                            ).transform(t);
-                          } else {
-                            tLeft = t;
-                            tRight = t;
-                          }
+                    if (_currentTabIndex > _oldTabIndex) {
+                      tRight = CurveTween(
+                        curve: Curves.easeOutQuart,
+                      ).transform(t);
+                      tLeft = CurveTween(
+                        curve: Curves.easeInQuad,
+                      ).transform(t);
+                    } else if (_currentTabIndex < _oldTabIndex) {
+                      tLeft = CurveTween(
+                        curve: Curves.easeOutQuart,
+                      ).transform(t);
+                      tRight = CurveTween(
+                        curve: Curves.easeInQuad,
+                      ).transform(t);
+                    } else {
+                      tLeft = t;
+                      tRight = t;
+                    }
 
-                          final double leftSource =
-                              centerSource - pillNormalWidth / 2;
-                          final double leftTarget =
-                              centerTarget - pillNormalWidth / 2;
-                          final double rightSource =
-                              centerSource + pillNormalWidth / 2;
-                          final double rightTarget =
-                              centerTarget + pillNormalWidth / 2;
+                    final double leftSource =
+                        centerSource - pillNormalWidth / 2;
+                    final double leftTarget =
+                        centerTarget - pillNormalWidth / 2;
+                    final double rightSource =
+                        centerSource + pillNormalWidth / 2;
+                    final double rightTarget =
+                        centerTarget + pillNormalWidth / 2;
 
-                          double currentLeft =
-                              leftSource + (leftTarget - leftSource) * tLeft;
-                          double currentRight =
-                              rightSource +
-                              (rightTarget - rightSource) * tRight;
+                    double currentLeft =
+                        leftSource + (leftTarget - leftSource) * tLeft;
+                    double currentRight =
+                        rightSource + (rightTarget - rightSource) * tRight;
 
-                          // Clamping to avoid overflow on extremely small screens
-                          if (currentLeft < 0.0) {
-                            currentLeft = 0.0;
-                          }
-                          if (currentRight > totalWidth) {
-                            currentRight = totalWidth;
-                          }
-                          final double currentWidth =
-                              (currentRight - currentLeft).clamp(
-                                pillNormalWidth,
-                                totalWidth,
-                              );
+                    if (currentLeft < 0.0) {
+                      currentLeft = 0.0;
+                    }
+                    if (currentRight > totalWidth) {
+                      currentRight = totalWidth;
+                    }
+                    final double currentWidth =
+                        (currentRight - currentLeft).clamp(
+                          pillNormalWidth,
+                          totalWidth,
+                        );
 
-                          Color getNavItemColor(int index) {
-                            final Color activeColor = HestiaColors.primary;
-                            final Color inactiveColor = Colors.brown.withValues(
-                              alpha: 0.5,
-                            );
-                            if (_oldTabIndex == _currentTabIndex) {
-                              return index == _currentTabIndex
-                                  ? activeColor
-                                  : inactiveColor;
-                            }
-                            if (index == _currentTabIndex) {
-                              return Color.lerp(
-                                    inactiveColor,
-                                    activeColor,
-                                    t,
-                                  ) ??
-                                  activeColor;
-                            } else if (index == _oldTabIndex) {
-                              return Color.lerp(
-                                    activeColor,
-                                    inactiveColor,
-                                    t,
-                                  ) ??
-                                  inactiveColor;
-                            } else {
-                              return inactiveColor;
-                            }
-                          }
+                    Color getNavItemColor(int index) {
+                      const Color activeColor = HestiaColors.primary;
+                      final Color inactiveColor =
+                          Colors.white.withValues(alpha: 0.7);
+                      if (_oldTabIndex == _currentTabIndex) {
+                        return index == _currentTabIndex
+                            ? activeColor
+                            : inactiveColor;
+                      }
+                      if (index == _currentTabIndex) {
+                        return Color.lerp(
+                              inactiveColor,
+                              activeColor,
+                              t,
+                            ) ??
+                            activeColor;
+                      } else if (index == _oldTabIndex) {
+                        return Color.lerp(
+                              activeColor,
+                              inactiveColor,
+                              t,
+                            ) ??
+                            inactiveColor;
+                      } else {
+                        return inactiveColor;
+                      }
+                    }
 
                           String getTabLabel(int index) {
                             switch (index) {
@@ -2781,7 +2712,7 @@ class _HomeScreenState extends State<HomeScreen>
                               case 1:
                                 return 'Bookings';
                               case 2:
-                                return 'Profile';
+                                return 'Hestia Money';
                               default:
                                 return '';
                             }
@@ -2812,8 +2743,8 @@ class _HomeScreenState extends State<HomeScreen>
                                     : Icons.calendar_month_outlined;
                               case 2:
                                 return isEngulfed
-                                    ? Icons.person
-                                    : Icons.person_outline;
+                                    ? Icons.account_balance_wallet
+                                    : Icons.account_balance_wallet_outlined;
                               default:
                                 return Icons.home_outlined;
                             }
@@ -2835,27 +2766,58 @@ class _HomeScreenState extends State<HomeScreen>
                                 behavior: HitTestBehavior.opaque,
                                 child: Container(
                                   alignment: Alignment.center,
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        getIconData(index),
-                                        color: color,
-                                        size: 22,
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        getTabLabel(index),
-                                        style: TextStyle(
-                                          color: color,
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          letterSpacing: 0.2,
+                                  child: index == 2
+                                      ? Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Text(
+                                              'Hestia',
+                                              style: TextStyle(
+                                                color: color,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                                height: 1.05,
+                                                letterSpacing: 0.2,
+                                              ),
+                                            ),
+                                            Text(
+                                              'MONEY',
+                                              style: TextStyle(
+                                                color: color,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w900,
+                                                height: 1.05,
+                                                letterSpacing: 0.6,
+                                              ),
+                                            ),
+                                          ],
+                                        )
+                                      : Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              getIconData(index),
+                                              color: color,
+                                              size: 22,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              getTabLabel(index),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                color: color,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w600,
+                                                letterSpacing: 0.2,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                      ),
-                                    ],
-                                  ),
                                 ),
                               ),
                             );
@@ -2877,16 +2839,8 @@ class _HomeScreenState extends State<HomeScreen>
                                     width: currentWidth,
                                     height: 66.0,
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.25,
-                                      ),
+                                      color: Colors.white,
                                       borderRadius: BorderRadius.circular(50),
-                                      border: Border.all(
-                                        color: Colors.white.withValues(
-                                          alpha: 1,
-                                        ),
-                                        width: 1.5,
-                                      ),
                                     ),
                                   ),
                                 ),
@@ -2911,9 +2865,6 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
             ),
-          ),
-        ),
-      ),
     );
   }
 }

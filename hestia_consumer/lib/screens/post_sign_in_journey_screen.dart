@@ -1,8 +1,9 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 
-import '../theme/colors.dart';
+import '../services/location_acquisition_service.dart';
+import '../services/location_geocoding_service.dart';
 import '../services/supabase_service.dart';
+import '../theme/colors.dart';
 import 'home_screen.dart';
 import 'search_location_screen.dart';
 
@@ -15,6 +16,9 @@ class PostSignInJourneyScreen extends StatefulWidget {
 
 class _PostSignInJourneyScreenState extends State<PostSignInJourneyScreen> {
   bool _checkingProfile = true;
+  int _step = 0;
+  String _fullName = '';
+  String? _email;
 
   @override
   void initState() {
@@ -27,24 +31,55 @@ class _PostSignInJourneyScreenState extends State<PostSignInJourneyScreen> {
     if (user != null) {
       try {
         final isComplete = await SupabaseService.isProfileComplete(user.id);
-        if (isComplete) {
-          if (mounted) {
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (context) => const HomeScreen()),
-              (route) => false,
-            );
-          }
+        if (isComplete && mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(builder: (context) => const HomeScreen()),
+            (route) => false,
+          );
           return;
         }
       } catch (e) {
-        debugPrint('Error checking profile status in PostSignInJourneyScreen: $e');
+        debugPrint('Error checking profile status: $e');
       }
     }
+
     if (mounted) {
-      setState(() {
-        _checkingProfile = false;
-      });
+      setState(() => _checkingProfile = false);
     }
+  }
+
+  Future<void> _onProfileConfirmed({
+    required String firstName,
+    required String lastName,
+    required String email,
+  }) async {
+    final user = SupabaseService.currentUser;
+    if (user == null) return;
+
+    final fullName = lastName.trim().isEmpty
+        ? firstName.trim()
+        : '${firstName.trim()} ${lastName.trim()}';
+    final trimmedEmail = email.trim();
+
+    SupabaseService.pendingOnboardingFullName = fullName;
+    SupabaseService.pendingOnboardingEmail =
+        trimmedEmail.isEmpty ? null : trimmedEmail;
+
+    await SupabaseService.saveOnboardingBasics(
+      id: user.id,
+      fullName: fullName,
+      email: trimmedEmail.isEmpty ? null : trimmedEmail,
+      phone: SupabaseService.currentUserPhone.isNotEmpty
+          ? SupabaseService.currentUserPhone
+          : null,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _fullName = fullName;
+      _email = trimmedEmail.isEmpty ? null : trimmedEmail;
+      _step = 1;
+    });
   }
 
   @override
@@ -58,502 +93,154 @@ class _PostSignInJourneyScreenState extends State<PostSignInJourneyScreen> {
       );
     }
 
-    return Container(
-        color: HestiaColors.appBackground,
-      child: const Scaffold(
-        backgroundColor: Colors.transparent,
-        body: SafeArea(
-          child: _HouseholdIntroPage(),
-        ),
-      ),
+    if (_step == 0) {
+      return _ProfileDetailsPage(onConfirm: _onProfileConfirmed);
+    }
+
+    return _LocationSetupPage(
+      fullName: _fullName,
+      email: _email,
     );
   }
 }
 
-class _JourneyShell extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final Widget child;
-  final Widget primaryButton;
+class _ProfileDetailsPage extends StatefulWidget {
+  final Future<void> Function({
+    required String firstName,
+    required String lastName,
+    required String email,
+  }) onConfirm;
 
-  const _JourneyShell({
-    required this.title,
-    required this.subtitle,
-    required this.child,
-    required this.primaryButton,
-  });
+  const _ProfileDetailsPage({required this.onConfirm});
 
   @override
-  Widget build(BuildContext context) {
-    const currentPage = 0;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.1),
-                        blurRadius: 6,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.chevron_left,
-                    color: HestiaColors.primary,
-                    size: 28,
-                  ),
-                ),
-              ),
-              const Text(
-                'Hestia',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              const SizedBox(width: 40),
-            ],
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: List.generate(
-              2,
-              (index) => Expanded(
-                child: Container(
-                  height: 4,
-                  margin: EdgeInsets.only(right: index == 1 ? 0 : 8),
-                  decoration: BoxDecoration(
-                    color: index <= currentPage ? Colors.white : Colors.white.withValues(alpha: 0.3),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 28),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.bold,
-              color: Colors.white,
-              height: 1.15,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            subtitle,
-            style: TextStyle(
-              fontSize: 15,
-              color: Colors.white.withValues(alpha: 0.85),
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 24),
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(24),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                child: Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF6F4E37).withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: const Color(0xFF6F4E37).withValues(alpha: 0.18),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: child,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-          primaryButton,
-        ],
-      ),
-    );
-  }
+  State<_ProfileDetailsPage> createState() => _ProfileDetailsPageState();
 }
 
-class _HouseholdIntroPage extends StatefulWidget {
-  const _HouseholdIntroPage();
+class _ProfileDetailsPageState extends State<_ProfileDetailsPage> {
+  final _firstNameController = TextEditingController();
+  final _lastNameController = TextEditingController();
+  final _emailController = TextEditingController();
+  bool _isSaving = false;
 
   @override
-  State<_HouseholdIntroPage> createState() => _HouseholdIntroPageState();
-}
-
-class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
-  String _selectedReason = 'Post-Delivery Care';
-  final List<Map<String, dynamic>> _members = [];
-
-  // Helper to determine emoji based on age
-  String _getEmojiForAge(int age) {
-    if (age <= 2) return '👶';
-    if (age <= 12) return '🧒';
-    if (age <= 19) return '🧑';
-    if (age <= 59) return '🧑';
-    return '👵';
+  void dispose() {
+    _firstNameController.dispose();
+    _lastNameController.dispose();
+    _emailController.dispose();
+    super.dispose();
   }
 
-  // Helper to determine accent color based on age
-  Color _getColorForAge(int age) {
-    if (age <= 2) return const Color(0xFFFFE6CC);
-    if (age <= 12) return const Color(0xFFE1F5FE);
-    if (age <= 19) return const Color(0xFFEDE7F6);
-    if (age <= 59) return const Color(0xFFFCE4EC);
-    return const Color(0xFFE4F1D8);
-  }
+  bool get _canConfirm => _firstNameController.text.trim().isNotEmpty && !_isSaving;
 
-  void _showAddMemberDialog() {
-    final nameController = TextEditingController();
-    final ageController = TextEditingController();
-    String? selectedRole = 'Post-Delivery Care';
-    final formKey = GlobalKey<FormState>();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: HestiaColors.background,
-              surfaceTintColor: Colors.transparent,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              title: const Text(
-                'Add Household Member',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: HestiaColors.textDark,
-                ),
-              ),
-              content: Form(
-                key: formKey,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'MEMBER NAME',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: HestiaColors.textAccent,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: nameController,
-                        decoration: InputDecoration(
-                          hintText: 'e.g. Meera',
-                          filled: true,
-                          fillColor: HestiaColors.inputBackground,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Please enter a name';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'AGE (YEARS)',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: HestiaColors.textAccent,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      TextFormField(
-                        controller: ageController,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          hintText: 'e.g. 68',
-                          filled: true,
-                          fillColor: HestiaColors.inputBackground,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                          ),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Please enter age';
-                          }
-                          final age = int.tryParse(value);
-                          if (age == null || age < 0) {
-                            return 'Please enter a valid age';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'SERVICE PREFERRED',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: HestiaColors.textAccent,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      DropdownButtonFormField<String>(
-                        initialValue: selectedRole,
-                        hint: const Text('Select service preferred'),
-                        decoration: InputDecoration(
-                          filled: true,
-                          fillColor: HestiaColors.inputBackground,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.inputBorder),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
-                          ),
-                        ),
-                        items: [
-                          'Post-Delivery Care',
-                          'Mobility Support',
-                          'Elder Care',
-                          'Babysitting',
-                          'Other',
-                        ].map((val) => DropdownMenuItem(
-                          value: val,
-                          child: Text(val),
-                        )).toList(),
-                        onChanged: (val) {
-                          setDialogState(() {
-                            selectedRole = val;
-                          });
-                        },
-                        validator: (val) => val == null ? 'Select service preferred' : null,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel', style: TextStyle(color: HestiaColors.textMedium)),
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HestiaColors.primary,
-                    foregroundColor: HestiaColors.buttonText,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  onPressed: () {
-                    if (formKey.currentState!.validate()) {
-                      final age = int.parse(ageController.text);
-                      setState(() {
-                        _members.add({
-                          'name': nameController.text.trim(),
-                          'age': age,
-                          'role': selectedRole ?? 'Other',
-                        });
-                      });
-                      Navigator.pop(context);
-                    }
-                  },
-                  child: const Text('Add'),
-                ),
-              ],
-            );
-          },
+  Future<void> _confirm() async {
+    if (!_canConfirm) return;
+    setState(() => _isSaving = true);
+    try {
+      await widget.onConfirm(
+        firstName: _firstNameController.text.trim(),
+        lastName: _lastNameController.text.trim(),
+        email: _emailController.text.trim(),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save details: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
         );
-      },
-    );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return _JourneyShell(
-      title: 'Tell us about\nyour household',
-      subtitle: 'This helps us personalise your care experience',
-      primaryButton: SizedBox(
-        width: double.infinity,
-        height: 56,
-        child: ElevatedButton(
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => SearchLocationScreen(
-                  isPostSignInJourney: true,
-                  primaryReason: _selectedReason,
-                  members: _members,
-                ),
-              ),
-            );
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: HestiaColors.primary,
-            foregroundColor: HestiaColors.buttonText,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            elevation: 0,
-          ),
-          child: const Text(
-            'Continue',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-      ),
-      child: SingleChildScrollView(
+    return Scaffold(
+      backgroundColor: HestiaColors.background,
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'SERVICE PREFERRED',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: HestiaColors.textLight,
-                letterSpacing: 1.3,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                'Post-Delivery Care',
-                'Mobility Support',
-                'Elder Care',
-                'Babysitting',
-                'Other',
-              ].map((reason) {
-                final isSelected = _selectedReason == reason;
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _selectedReason = reason;
-                    });
-                  },
-                  child: _ReasonChip(
-                    label: reason,
-                    selected: isSelected,
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 22),
-            const Text(
-              'Household members',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: HestiaColors.textDark,
-              ),
-            ),
-            const SizedBox(height: 12),
-            ..._members.asMap().entries.map((entry) {
-              final index = entry.key;
-              final member = entry.value;
-              final age = member['age'] as int;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12.0),
-                child: _HouseholdMemberCard(
-                  name: '${member['name']} (${age > 0 ? '$age yr' : 'Newborn'})',
-                  subtitle: member['role'],
-                  icon: _getEmojiForAge(age),
-                  accentColor: _getColorForAge(age),
-                  onRemove: () {
-                    setState(() {
-                      _members.removeAt(index);
-                    });
-                  },
-                ),
-              );
-            }),
-            GestureDetector(
-              onTap: _showAddMemberDialog,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF5ECE3),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE6D5C5)),
-                ),
-                child: Row(
-                  children: const [
-                    _IconBadge(icon: Icons.add, background: Color(0xFFE6D5C5)),
-                    SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    RichText(
+                      text: const TextSpan(
+                        style: TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w800,
+                          color: HestiaColors.textDark,
+                          height: 1.2,
+                        ),
                         children: [
-                          Text(
-                            'Add household member',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: HestiaColors.textDark,
-                            ),
+                          TextSpan(text: 'Help us '),
+                          TextSpan(
+                            text: 'know you',
+                            style: TextStyle(color: HestiaColors.primary),
                           ),
-                          SizedBox(height: 2),
-                          Text(
-                            'Newborn, elderly parent, patient...',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: HestiaColors.textMedium,
-                            ),
-                          ),
+                          TextSpan(text: ' better'),
                         ],
                       ),
                     ),
+                    const SizedBox(height: 32),
+                    _buildField(
+                      controller: _firstNameController,
+                      hint: 'First name',
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildField(
+                      controller: _lastNameController,
+                      hint: 'Last name (optional)',
+                    ),
+                    const SizedBox(height: 16),
+                    _buildField(
+                      controller: _emailController,
+                      hint: 'Email (optional)',
+                      keyboardType: TextInputType.emailAddress,
+                    ),
                   ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+              child: SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: ElevatedButton(
+                  onPressed: _canConfirm ? _confirm : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: HestiaColors.primary,
+                    disabledBackgroundColor: const Color(0xFFD9D9D9),
+                    disabledForegroundColor: Colors.white,
+                    foregroundColor: HestiaColors.buttonText,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  child: _isSaving
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Confirm details',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                 ),
               ),
             ),
@@ -562,126 +249,299 @@ class _HouseholdIntroPageState extends State<_HouseholdIntroPage> {
       ),
     );
   }
-}
 
-class _ReasonChip extends StatelessWidget {
-  final String label;
-  final bool selected;
-
-  const _ReasonChip({required this.label, this.selected = false});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildField({
+    required TextEditingController controller,
+    required String hint,
+    TextInputType keyboardType = TextInputType.text,
+    ValueChanged<String>? onChanged,
+  }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
       decoration: BoxDecoration(
-        color: selected 
-            ? HestiaColors.primary 
-            : HestiaColors.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: selected 
-              ? HestiaColors.primary 
-              : HestiaColors.primary.withValues(alpha: 0.25),
-        ),
+        color: HestiaColors.inputBackground,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE0E0E0)),
       ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 14,
-          color: selected ? Colors.white : HestiaColors.primary,
-          fontWeight: FontWeight.w600,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        onChanged: onChanged,
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+          color: HestiaColors.textDark,
+        ),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: const TextStyle(
+            color: Color(0xFF9E9E9E),
+            fontWeight: FontWeight.w400,
+          ),
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 16),
         ),
       ),
     );
   }
 }
 
-class _HouseholdMemberCard extends StatelessWidget {
-  final String name;
-  final String subtitle;
-  final String icon;
-  final Color accentColor;
-  final VoidCallback onRemove;
+class _LocationSetupPage extends StatefulWidget {
+  final String fullName;
+  final String? email;
 
-  const _HouseholdMemberCard({
-    required this.name,
-    required this.subtitle,
-    required this.icon,
-    required this.accentColor,
-    required this.onRemove,
+  const _LocationSetupPage({
+    required this.fullName,
+    this.email,
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5ECE3),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: accentColor,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            alignment: Alignment.center,
-            child: Text(icon, style: const TextStyle(fontSize: 24)),
+  State<_LocationSetupPage> createState() => _LocationSetupPageState();
+}
+
+class _LocationSetupPageState extends State<_LocationSetupPage> {
+  static const _illustrationAsset = 'assets/images/location_illustration.png';
+
+  bool _isLoading = false;
+
+  Future<void> _useCurrentLocation() async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+
+    try {
+      final position = await LocationAcquisitionService.acquirePosition();
+
+      if (position == null) {
+        throw Exception(
+          'Could not get your location. On emulator, open Extended Controls '
+          '→ Location, pick a point, tap Set Location, then try again. '
+          'Or enter your address manually.',
+        );
+      }
+
+      final address = await LocationGeocodingService.reverseGeocode(
+        position.latitude,
+        position.longitude,
+      ).timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => null,
+      );
+
+      if (address == null ||
+          (address['street']?.trim().isEmpty ?? true) ||
+          (address['city']?.trim().isEmpty ?? true)) {
+        throw Exception('Could not resolve your address. Try entering it manually.');
+      }
+
+      final user = SupabaseService.currentUser;
+      if (user == null) return;
+
+      final bool withinCoverage = await SupabaseService.isPointWithinCoverage(
+        position.latitude,
+        position.longitude,
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => true,
+      );
+
+      await SupabaseService.completeOnboarding(
+        id: user.id,
+        fullName: widget.fullName,
+        email: widget.email,
+        phone: SupabaseService.currentUserPhone.isNotEmpty
+            ? SupabaseService.currentUserPhone
+            : null,
+        address: address,
+        withinCoverage: withinCoverage,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => throw Exception(
+          'Saving your details timed out. Please check your connection and try again.',
+        ),
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+        (route) => false,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            backgroundColor: Colors.redAccent,
           ),
-          const SizedBox(width: 12),
-          Expanded(
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _enterLocationManually() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => const SearchLocationScreen(
+          isPostSignInJourney: true,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: HestiaColors.background,
+      body: Stack(
+        children: [
+          SafeArea(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: HestiaColors.textDark,
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(top: 40, bottom: 24),
+                    child: Column(
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 24),
+                          child: Text(
+                            "What's your location?",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                              color: HestiaColors.textDark,
+                              height: 1.2,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 24),
+                          child: Text(
+                            'We need your location to show you our serviceable hubs.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                              color: Color(0xFF8A8A8A),
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 32),
+                        ShaderMask(
+                          shaderCallback: (rect) => const LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.white,
+                              Colors.white,
+                              Colors.transparent,
+                            ],
+                            stops: [0.0, 0.2, 0.65, 1.0],
+                          ).createShader(rect),
+                          blendMode: BlendMode.dstIn,
+                          child: Image.asset(
+                            _illustrationAsset,
+                            width: double.infinity,
+                            fit: BoxFit.fitWidth,
+                            errorBuilder: (_, _, _) => const SizedBox(
+                              height: 240,
+                              child: Center(
+                                child: Icon(
+                                  Icons.location_city_outlined,
+                                  size: 72,
+                                  color: Color(0xFFD0C4BA),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: HestiaColors.textMedium,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        width: double.infinity,
+                        height: 54,
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading ? null : _useCurrentLocation,
+                          icon: const Icon(Icons.my_location, size: 20),
+                          label: const Text(
+                            'Use current location',
+                            style: TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: HestiaColors.primary,
+                            disabledBackgroundColor: const Color(0xFFD9D9D9),
+                            foregroundColor: HestiaColors.buttonText,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: _isLoading ? null : _enterLocationManually,
+                        child: const Text(
+                          'Enter location manually',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: HestiaColors.primary,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-          GestureDetector(
-            onTap: onRemove,
-            child: const Icon(Icons.close, color: HestiaColors.textLight, size: 20),
-          ),
+          if (_isLoading)
+            Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: 0.45),
+                child: const Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(height: 20),
+                    Text(
+                      'Please wait...',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
-    );
-  }
-}
-
-class _IconBadge extends StatelessWidget {
-  final IconData icon;
-  final Color background;
-
-  const _IconBadge({required this.icon, required this.background});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 48,
-      height: 48,
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Icon(icon, color: HestiaColors.primary, size: 24),
     );
   }
 }

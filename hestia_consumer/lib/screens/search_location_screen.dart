@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
@@ -14,14 +13,10 @@ import 'home_screen.dart';
 
 class SearchLocationScreen extends StatefulWidget {
   final bool isPostSignInJourney;
-  final String? primaryReason;
-  final List<Map<String, dynamic>>? members;
 
   const SearchLocationScreen({
     super.key,
     this.isPostSignInJourney = false,
-    this.primaryReason,
-    this.members,
   });
 
   @override
@@ -237,46 +232,47 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Search box - liquid glass
+              // Search box
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.25),
-                          width: 1.5,
-                        ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: HestiaColors.primary.withValues(alpha: 0.2),
+                      width: 1.4,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
                       ),
-                      child: TextFormField(
-                        controller: _searchController,
-                        onChanged: _onSearchChanged,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
-                        decoration: InputDecoration(
-                          hintText: 'Search locality, sector, area',
-                          hintStyle: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.6),
-                            fontWeight: FontWeight.normal,
-                            fontSize: 15,
-                          ),
-                          prefixIcon: const Icon(
-                            Icons.search,
-                            color: Colors.white,
-                            size: 24,
-                          ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                        ),
+                    ],
+                  ),
+                  child: TextFormField(
+                    controller: _searchController,
+                    onChanged: _onSearchChanged,
+                    style: const TextStyle(
+                      color: HestiaColors.textDark,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Search locality, sector, area',
+                      hintStyle: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontWeight: FontWeight.normal,
+                        fontSize: 15,
                       ),
+                      prefixIcon: const Icon(
+                        Icons.search,
+                        color: HestiaColors.primary,
+                        size: 24,
+                      ),
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     ),
                   ),
                 ),
@@ -298,7 +294,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
   Widget _buildSearchSuggestions(Color greenAccent) {
     if (_isSearching) {
       return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
+        child: CircularProgressIndicator(color: HestiaColors.primary),
       );
     }
 
@@ -307,11 +303,15 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.search_off_rounded, size: 48, color: Colors.white70),
+            Icon(
+              Icons.search_off_rounded,
+              size: 48,
+              color: HestiaColors.primary.withValues(alpha: 0.4),
+            ),
             const SizedBox(height: 12),
-            Text(
+            const Text(
               "No results found",
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 15),
+              style: TextStyle(color: HestiaColors.textMedium, fontSize: 15),
             ),
           ],
         ),
@@ -320,34 +320,47 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 10.0),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.25),
-                width: 1.5,
-              ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: HestiaColors.primary.withValues(alpha: 0.15),
+            width: 1.4,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
             ),
-            child: ListView.separated(
-              shrinkWrap: true,
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 8.0),
-              itemCount: _searchResults.length,
-              separatorBuilder: (context, index) => Divider(color: Colors.white.withValues(alpha: 0.15), height: 1),
-              itemBuilder: (context, index) {
-                final item = _searchResults[index];
-                return ListTile(
-                  leading: const Icon(Icons.location_on_outlined, color: Colors.white),
-                  title: Text(
-                    item['place_name'],
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Colors.white),
-                  ),
-                  onTap: () {
+          ],
+        ),
+        child: ListView.separated(
+          shrinkWrap: true,
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.symmetric(vertical: 8.0),
+          itemCount: _searchResults.length,
+          separatorBuilder: (context, index) => Divider(
+            color: HestiaColors.primary.withValues(alpha: 0.1),
+            height: 1,
+          ),
+          itemBuilder: (context, index) {
+            final item = _searchResults[index];
+            return ListTile(
+              leading: const Icon(
+                Icons.location_on_outlined,
+                color: HestiaColors.primary,
+              ),
+              title: Text(
+                item['place_name'],
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: HestiaColors.textDark,
+                ),
+              ),
+              onTap: () {
                     // Push ConfirmLocationScreen with search data pre-filled
                     Navigator.of(context).push(
                       MaterialPageRoute(
@@ -361,8 +374,6 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                           },
                           initialCoords: LatLng(item['lat'], item['lng']),
                           isPostSignInJourney: widget.isPostSignInJourney,
-                          primaryReason: widget.primaryReason,
-                          members: widget.members,
                         ),
                       ),
                     ).then((_) => _loadAddress());
@@ -371,9 +382,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
               },
             ),
           ),
-        ),
-      ),
-    );
+        );
   }
 
   Widget _buildHomeState(Color greenAccent, String addressText) {
@@ -387,105 +396,113 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Grouped Card: Add Address + Use Current Location - liquid glass
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.25),
-                          width: 1.5,
+                // Grouped Card: Add Address + Use Current Location
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: HestiaColors.primary.withValues(alpha: 0.15),
+                      width: 1.4,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.04),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      // "+ Add address"
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => ConfirmLocationScreen(
+                                editMode: false,
+                                isPostSignInJourney: widget.isPostSignInJourney,
+                              ),
+                            ),
+                          ).then((_) => _loadAddress());
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.add, color: HestiaColors.primary, size: 22),
+                              const SizedBox(width: 14),
+                              const Expanded(
+                                child: Text(
+                                  'Add address',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: HestiaColors.textDark,
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right,
+                                color: HestiaColors.primary.withValues(alpha: 0.5),
+                                size: 20,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      child: Column(
-                        children: [
-                          // "+ Add address"
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => ConfirmLocationScreen(
-                                    editMode: false,
-                                    isPostSignInJourney: widget.isPostSignInJourney,
-                                    primaryReason: widget.primaryReason,
-                                    members: widget.members,
-                                  ),
-                                ),
-                              ).then((_) => _loadAddress());
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.add, color: Colors.white, size: 22),
-                                  const SizedBox(width: 14),
-                                  const Expanded(
-                                    child: Text(
-                                      'Add address',
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                  Icon(Icons.chevron_right, color: Colors.white.withValues(alpha: 0.6), size: 20),
-                                ],
-                              ),
-                            ),
-                          ),
-                          
-                          // Divider
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                            child: Divider(color: Colors.white.withValues(alpha: 0.15), height: 1),
-                          ),
 
-                          // "Use current location"
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => ConfirmLocationScreen(
-                                    editMode: false,
-                                    useCurrentLocation: true,
-                                    isPostSignInJourney: widget.isPostSignInJourney,
-                                    primaryReason: widget.primaryReason,
-                                    members: widget.members,
-                                  ),
-                                ),
-                              ).then((_) => _loadAddress());
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.my_location, color: Colors.white, size: 20),
-                                  const SizedBox(width: 16),
-                                  const Expanded(
-                                    child: Text(
-                                      'Use current location',
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                  Icon(Icons.chevron_right, color: Colors.white.withValues(alpha: 0.6), size: 20),
-                                ],
+                      // Divider
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                        child: Divider(
+                          color: HestiaColors.primary.withValues(alpha: 0.1),
+                          height: 1,
+                        ),
+                      ),
+
+                      // "Use current location"
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => ConfirmLocationScreen(
+                                editMode: false,
+                                useCurrentLocation: true,
+                                isPostSignInJourney: widget.isPostSignInJourney,
                               ),
                             ),
+                          ).then((_) => _loadAddress());
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 18.0),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.my_location, color: HestiaColors.primary, size: 20),
+                              const SizedBox(width: 16),
+                              const Expanded(
+                                child: Text(
+                                  'Use current location',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: HestiaColors.textDark,
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right,
+                                color: HestiaColors.primary.withValues(alpha: 0.5),
+                                size: 20,
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
 
@@ -528,9 +545,7 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                         margin: const EdgeInsets.only(bottom: 16),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(16),
-                          child: BackdropFilter(
-                            filter: ImageFilter.blur(sigmaX: 16.0, sigmaY: 16.0),
-                            child: GestureDetector(
+                          child: GestureDetector(
                               onTap: () async {
                                 final user = SupabaseService.currentUser;
                                 if (user != null && !isPrimary) {
@@ -545,15 +560,11 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                                 width: double.infinity,
                                 padding: const EdgeInsets.all(20.0),
                                 decoration: BoxDecoration(
-                                  color: isPrimary
-                                      ? const Color(0xFFF5ECE3).withValues(alpha: 0.9)
-                                      : const Color(0xFFF5ECE3).withValues(alpha: 0.5),
+                                  color: const Color(0xFFF5ECE3),
                                   borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
-                                    color: isPrimary
-                                        ? const Color(0xFFD4BCA2)
-                                        : const Color(0xFFE6D5C5).withValues(alpha: 0.6),
-                                    width: 1.5,
+                                    color: HestiaColors.primary,
+                                    width: isPrimary ? 2 : 1.5,
                                   ),
                                 ),
                                 child: Row(
@@ -645,8 +656,6 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                                                           },
                                                           initialCoords: const LatLng(28.6139, 77.2090),
                                                           isPostSignInJourney: widget.isPostSignInJourney,
-                                                          primaryReason: widget.primaryReason,
-                                                          members: widget.members,
                                                         ),
                                                       ),
                                                     ).then((_) => _loadAddress());
@@ -794,7 +803,6 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                               ),
                             ),
                           ),
-                        ),
                       );
                     }).toList(),
                   ),
@@ -839,37 +847,52 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
             };
 
       try {
-        await SupabaseService.saveUserProfile(
-          id: user.id,
-          fullName: fullName,
-          email: email,
-          phone: phone,
-          primaryReason: widget.primaryReason ?? 'New mother',
-          members: widget.members ?? [],
-          address: addressToSave,
-        );
+        if (widget.isPostSignInJourney) {
+          final fullName = SupabaseService.pendingOnboardingFullName ??
+              user.userMetadata?['full_name']?.toString() ??
+              'User';
+          final email = SupabaseService.pendingOnboardingEmail ??
+              user.userMetadata?['email']?.toString() ??
+              user.email ??
+              '';
 
-        final profileData = {
-          'id': user.id,
-          'name': fullName,
-          'email': email,
-          'phone': phone,
-          'primary_reason': widget.primaryReason ?? 'New mother',
-          'household_members': widget.members ?? [],
-          'address': addressToSave,
-          'updated_at': DateTime.now().toIso8601String(),
-        };
-        await SupabaseService.uploadProfileJson(
-          id: user.id,
-          profileData: profileData,
-        );
+          await SupabaseService.completeOnboarding(
+            id: user.id,
+            fullName: fullName,
+            email: email,
+            phone: phone,
+            address: addressToSave,
+          );
+        } else {
+          await SupabaseService.saveUserProfile(
+            id: user.id,
+            fullName: fullName,
+            email: email,
+            phone: phone,
+            address: addressToSave,
+          );
 
-        await SupabaseService.createProfile(
-          id: user.id,
-          fullName: fullName,
-          email: email,
-          phone: phone,
-        );
+          final profileData = {
+            'id': user.id,
+            'name': fullName,
+            'email': email,
+            'phone': phone,
+            'primary_reason': 'New mother',
+            'address': addressToSave,
+            'updated_at': DateTime.now().toIso8601String(),
+          };
+          await SupabaseService.uploadProfileJson(
+            id: user.id,
+            profileData: profileData,
+          );
+
+          await SupabaseService.createProfile(
+            id: user.id,
+            fullName: fullName,
+            email: email,
+            phone: phone,
+          );
+        }
       } catch (e) {
         debugPrint('Warning: Could not save profile: $e');
       }

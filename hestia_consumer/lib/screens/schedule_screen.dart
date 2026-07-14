@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
+import '../config/razorpay_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'choose_professional_screen.dart';
@@ -39,7 +41,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   String _addressText = '89, Usuw, Pocket 25, Pocket 25, Bharat singh, Pista, New Delhi, Delhi, India, 110085';
   String _phone = '+91 8144684265';
   String _userName = 'Soumya';
+  String _userEmail = '';
   bool _isLoadingAddress = false;
+
+  late Razorpay _razorpay;
 
   @override
   void initState() {
@@ -52,7 +57,92 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     }
     _scheduledDate = widget.initialDate;
     _scheduledTimeSlot = widget.initialTimeSlot;
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
     _loadAddress();
+  }
+
+  @override
+  void dispose() {
+    _razorpay.clear();
+    super.dispose();
+  }
+
+  void _proceedToPay() {
+    final itemTotal = _getItemTotal();
+    final finalPay = (itemTotal + itemTotal * 0.18).toInt();
+    final serviceNames = _servicesMap.keys.join(', ');
+    final authEmail = SupabaseService.currentUserEmail;
+
+    final options = {
+      'key': RazorpayConfig.keyId,
+      'amount': finalPay * 100,
+      'name': 'Hestia',
+      'description': 'Payment for $serviceNames Care Session',
+      'timeout': 300,
+      'prefill': {
+        'name': _userName.isNotEmpty ? _userName : 'Guest User',
+        'contact': _phone.isNotEmpty ? _phone : '9876543210',
+        'email': _userEmail.isNotEmpty
+            ? _userEmail
+            : (authEmail.isNotEmpty ? authEmail : 'user@example.com'),
+      },
+      'external': {
+        'wallets': ['paytm'],
+      },
+    };
+
+    try {
+      _razorpay.open(options);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not open Razorpay checkout: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  void _handlePaymentSuccess(PaymentSuccessResponse response) {
+    if (!mounted) return;
+    if (_scheduledDate == null || _scheduledTimeSlot == null) return;
+
+    final firstService =
+        _servicesMap.keys.isNotEmpty ? _servicesMap.keys.first : widget.serviceTitle;
+    final matchedTitle = _getDetail(firstService)?.title ?? widget.serviceTitle;
+    final itemTotal = _getItemTotal();
+    final finalPay = (itemTotal + itemTotal * 0.18).toInt();
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => ChooseProfessionalScreen(
+          serviceTitle: matchedTitle,
+          selectedDate: _scheduledDate!,
+          selectedTime: _scheduledTimeSlot!,
+          selectedDuration: _getSelectedDurationLabel(),
+          repeatOption: 'Once',
+          endsAfter: '1 session',
+          preferSameProfessional: false,
+          servicesMap: _servicesMap,
+          paymentId: response.paymentId,
+          paidAmount: finalPay,
+        ),
+      ),
+    );
+  }
+
+  void _handlePaymentError(PaymentFailureResponse response) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Payment failed: ${response.message ?? 'You cancelled the payment'}',
+        ),
+        backgroundColor: Colors.redAccent,
+      ),
+    );
   }
 
   Future<void> _loadAddress() async {
@@ -76,6 +166,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                 : authPhone.isNotEmpty
                     ? authPhone
                     : '+91 8144684265';
+            final authEmail = SupabaseService.currentUserEmail;
+            _userEmail = (profileData['email'] as String?)?.isNotEmpty == true
+                ? profileData['email'] as String
+                : authEmail;
             
             if (profileData['address'] != null) {
               final Map<String, dynamic> address = Map<String, dynamic>.from(profileData['address']);
@@ -220,8 +314,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final hasItems = _servicesMap.isNotEmpty;
 
     return Scaffold(
+      backgroundColor: HestiaColors.mutedGrey,
       body: Container(
-        color: HestiaColors.appBackground,
+        color: HestiaColors.mutedGrey,
         child: SafeArea(
           child: Column(
             children: [
@@ -1110,22 +1205,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                             if (_scheduledDate == null || _scheduledTimeSlot == null) {
                               _openTimeSlotBottomSheet(context);
                             } else {
-                              final firstService = _servicesMap.keys.isNotEmpty ? _servicesMap.keys.first : widget.serviceTitle;
-                              final matchedTitle = _getDetail(firstService)?.title ?? widget.serviceTitle;
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => ChooseProfessionalScreen(
-                                    serviceTitle: matchedTitle,
-                                    selectedDate: _scheduledDate!,
-                                    selectedTime: _scheduledTimeSlot!,
-                                    selectedDuration: _getSelectedDurationLabel(),
-                                    repeatOption: 'Once',
-                                    endsAfter: '1 session',
-                                    preferSameProfessional: false,
-                                    servicesMap: _servicesMap,
-                                  ),
-                                ),
-                              );
+                              _proceedToPay();
                             }
                           }
                         },

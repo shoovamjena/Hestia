@@ -503,7 +503,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             color: Colors.white.withValues(alpha: 0.16),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
-              color: Colors.white.withValues(alpha: 0.9),
+              color: HestiaColors.primary,
               width: 1.5,
             ),
           ),
@@ -512,7 +512,7 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.bold,
-              color: Colors.white,
+              color: HestiaColors.primary,
               letterSpacing: 0.5,
             ),
           ),
@@ -1019,8 +1019,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
               ),
             ),
 
-            // Padding at the bottom of the scroll view
-            const SizedBox(height: 100),
+            // Padding at the bottom of the scroll view (space for floating cart bar)
+            const SizedBox(height: 110),
           ],
         ),
       ),
@@ -1029,60 +1029,6 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
       _buildFloatingCartBar(detail),
     ],
   ),
-      ),
-      
-      // Sticky Bottom Book Now Button
-      bottomNavigationBar: _selectedServicesMap.isNotEmpty
-          ? null
-          : SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20.0, 8.0, 20.0, 20.0),
-          child: Container(
-            width: double.infinity,
-            height: 56,
-            decoration: BoxDecoration(
-              color: HestiaColors.primary,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: HestiaColors.primary.withValues(alpha: 0.15),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(28),
-                onTap: () {
-                  if (_selectedMinutes == 0) {
-                    setState(() {
-                      _selectedMinutes = 30;
-                      _selectedServicesMap[widget.serviceKey] = 30;
-                    });
-                    widget.onMinutesChanged?.call(30);
-                  }
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => ScheduleScreen(serviceTitle: detail.title),
-                    ),
-                  );
-                },
-                child: const Center(
-                  child: Text(
-                    'Book now',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -1225,10 +1171,10 @@ class _FaqAccordionItemState extends State<FaqAccordionItem> {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF9F8F6), // Warm cream-tinted light card background
+        color: HestiaColors.mutedBrown,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: HestiaColors.primary.withValues(alpha: 0.08),
+          color: HestiaColors.primary.withValues(alpha: 0.2),
           width: 1,
         ),
       ),
@@ -1252,13 +1198,13 @@ class _FaqAccordionItemState extends State<FaqAccordionItem> {
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
-                        color: HestiaColors.textDark,
+                        color: Colors.white,
                       ),
                     ),
                   ),
                   Icon(
                     _isExpanded ? Icons.remove : Icons.add,
-                    color: HestiaColors.textDark,
+                    color: Colors.white,
                     size: 20,
                   ),
                 ],
@@ -1272,9 +1218,9 @@ class _FaqAccordionItemState extends State<FaqAccordionItem> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   widget.faq.answer,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
-                    color: HestiaColors.textMedium,
+                    color: Colors.white.withValues(alpha: 0.9),
                     height: 1.45,
                   ),
                 ),

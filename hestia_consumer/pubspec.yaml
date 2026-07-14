@@ -41,6 +41,7 @@ dependencies:
   flutter_map: ^8.3.0
   latlong2: ^0.9.1
   geolocator: ^14.0.2
+  androidx_graphics_shapes: ^1.6.0
 
 dev_dependencies:
   flutter_test:
@@ -71,6 +72,8 @@ flutter:
     - assets/images/onboarding_1.png
     - assets/images/onboarding_2.png
     - assets/images/onboarding_3.png
+    - assets/images/referral_illustration.png
+    - assets/images/location_illustration.png
     - assets/images/services/
     - assets/images/services/details/
     - assets/images/services/steps/
