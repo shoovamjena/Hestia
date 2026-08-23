@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/colors.dart';
-import 'choose_professional_screen.dart';
 import 'time_slot_bottom_sheet.dart';
 
 class RepeatBookingScreen extends StatefulWidget {
@@ -671,19 +670,13 @@ class _RepeatBookingScreenState extends State<RepeatBookingScreen> {
                     onTap: _canContinue
                         ? () {
                             HapticFeedback.lightImpact();
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => ChooseProfessionalScreen(
-                                  serviceTitle: widget.serviceTitle,
-                                  selectedDate: _startDate,
-                                  selectedTime: _selectedTimeSlot!,
-                                  selectedDuration: _selectedDurationLabel,
-                                  repeatOption: _selectedFrequency,
-                                  endsAfter: _formatMonthDay(_endDate),
-                                  preferSameProfessional: true,
-                                ),
-                              ),
-                            );
+                            Navigator.of(context).pop({
+                              'date': _startDate,
+                              'time': _selectedTimeSlot,
+                              'frequency': _selectedFrequency,
+                              'endsAfter': _formatMonthDay(_endDate),
+                              'duration': _selectedDurationLabel,
+                            });
                           }
                         : null,
                     child: const Center(

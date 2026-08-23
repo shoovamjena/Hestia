@@ -62,12 +62,14 @@ class ServiceDetailScreen extends StatefulWidget {
   final String serviceKey;
   final Map<String, int> initialServicesMap;
   final ValueChanged<int>? onMinutesChanged;
+  final bool bookingEnabled;
 
   const ServiceDetailScreen({
     super.key,
     required this.serviceKey,
     required this.initialServicesMap,
     this.onMinutesChanged,
+    this.bookingEnabled = true,
   });
 
   @override
@@ -488,6 +490,10 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
   }
 
   Widget _buildBookOrStepper(ServiceDetail detail) {
+    if (!widget.bookingEnabled) {
+      return const SizedBox.shrink();
+    }
+
     if (_selectedMinutes <= 0) {
       return GestureDetector(
         onTap: () {
@@ -1034,7 +1040,8 @@ class _ServiceDetailScreenState extends State<ServiceDetailScreen> {
   }
 
   Widget _buildFloatingCartBar(ServiceDetail currentDetail) {
-    final hasServices = _selectedServicesMap.isNotEmpty;
+    final hasServices =
+        widget.bookingEnabled && _selectedServicesMap.isNotEmpty;
     
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 350),

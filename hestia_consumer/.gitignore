@@ -44,5 +44,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# Supabase credentials â€” do not commit API keys
+# Supabase credentials — do not commit API keys
 lib/config/supabase_config.dart
+
+# Firebase admin / local Firebase config secrets
+hestia-consumer-firebase-adminsdk-*.json
+.env.fcm.local

@@ -1,0 +1,1 @@
+{"flutter":{"platforms":{"android":{"default":{"projectId":"hestia-consumer","appId":"1:48753988200:android:6aa4bfd36b46bc82cd61dd","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"hestia-consumer","configurations":{"android":"1:48753988200:android:6aa4bfd36b46bc82cd61dd","ios":"1:48753988200:ios:95a8062298a61672cd61dd"}}}}}}

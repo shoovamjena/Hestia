@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
+
+import '../config/razorpay_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 
@@ -15,9 +19,17 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
   int _punctualityRating = 5;
   int _professionalismRating = 5;
   int _qualityRating = 5;
+  bool _addTip = false;
+  int _tipAmount = 0;
+  int? _selectedTipPreset;
+  bool _isSubmitting = false;
 
   final Set<String> _selectedTags = {'Punctual', 'Caring', 'Great with Aryan'};
   final TextEditingController _commentController = TextEditingController();
+  final TextEditingController _tipController = TextEditingController();
+  late Razorpay _razorpay;
+
+  static const List<int> _tipPresets = [50, 100, 200];
 
   final List<String> _feedbackTags = [
     'Punctual',
@@ -28,14 +40,38 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handleTipPaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handleTipPaymentError);
+  }
+
+  @override
   void dispose() {
     _commentController.dispose();
+    _tipController.dispose();
+    _razorpay.clear();
     super.dispose();
   }
 
-  void _submitFeedback() async {
-    final bookingId = widget.sessionData['booking_id'] ?? 'mock-session-1';
-    
+  int _getTipAmount() {
+    if (!_addTip) return 0;
+    final parsed = int.tryParse(_tipController.text.trim());
+    if (parsed != null && parsed > 0) return parsed;
+    return _tipAmount > 0 ? _tipAmount : 0;
+  }
+
+  void _setTipAmount(int amount) {
+    setState(() {
+      _tipAmount = amount;
+      _selectedTipPreset = _tipPresets.contains(amount) ? amount : null;
+      _tipController.text = amount > 0 ? amount.toString() : '';
+    });
+  }
+
+  void _handleTipPaymentSuccess(PaymentSuccessResponse response) {
+    if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -43,9 +79,91 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
         child: CircularProgressIndicator(color: HestiaColors.primary),
       ),
     );
+    _completeSubmission(
+      tipAmount: _getTipAmount(),
+      tipPaymentId: response.paymentId,
+    );
+  }
+
+  void _handleTipPaymentError(PaymentFailureResponse response) {
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Tip payment failed: ${response.message ?? 'Payment cancelled'}',
+        ),
+        backgroundColor: Colors.redAccent,
+      ),
+    );
+  }
+
+  Future<void> _submitFeedback() async {
+    if (_isSubmitting) return;
+
+    if (_addTip && _getTipAmount() <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter a tip amount or turn off tipping'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    final tip = _getTipAmount();
+    if (tip > 0) {
+      setState(() => _isSubmitting = true);
+      final caregiverName =
+          widget.sessionData['caregiver_name']?.toString() ?? 'your professional';
+      final authEmail = SupabaseService.currentUserEmail;
+
+      try {
+        _razorpay.open({
+          'key': RazorpayConfig.keyId,
+          'amount': tip * 100,
+          'name': 'Hestia',
+          'description': 'Tip for $caregiverName',
+          'timeout': 300,
+          'prefill': {
+            'email': authEmail.isNotEmpty ? authEmail : 'user@example.com',
+          },
+        });
+      } catch (e) {
+        setState(() => _isSubmitting = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not open payment: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return;
+    }
+
+    await _completeSubmission();
+  }
+
+  Future<void> _completeSubmission({
+    int tipAmount = 0,
+    String? tipPaymentId,
+  }) async {
+    if (!mounted) return;
+
+    final bookingId = widget.sessionData['booking_id'] ?? 'mock-session-1';
+
+    if (!_isSubmitting) {
+      setState(() => _isSubmitting = true);
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(color: HestiaColors.primary),
+        ),
+      );
+    }
 
     try {
-      // Call service to update state
       await SupabaseService.rateSession(
         bookingId,
         overallRating: _overallRating,
@@ -54,23 +172,30 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
         qualityOfCare: _qualityRating,
         tags: _selectedTags.toList(),
         comment: _commentController.text.trim(),
+        tipAmount: tipAmount,
+        tipPaymentId: tipPaymentId,
       );
 
-      if (mounted) {
-        Navigator.of(context).pop(); // pop loader
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Feedback submitted successfully! Thank you.'),
-            backgroundColor: Color(0xFF2E6B4A),
-          ),
-        );
+      if (!mounted) return;
+      Navigator.of(context).pop(); // loader
 
-        Navigator.of(context).pop(true); // Return true to indicate reload needed
-      }
+      final message = tipAmount > 0
+          ? 'Thank you! Your feedback and ₹$tipAmount tip were sent.'
+          : 'Feedback submitted successfully! Thank you.';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFF2E6B4A),
+        ),
+      );
+
+      Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) {
-        Navigator.of(context).pop(); // pop loader
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to submit feedback: $e'),
@@ -78,7 +203,181 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
     }
+  }
+
+  Widget _buildTipSection(String caregiverName) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: _addTip
+              ? HestiaColors.primary.withValues(alpha: 0.35)
+              : HestiaColors.primary.withValues(alpha: 0.15),
+          width: 1.2,
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x05000000),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () {
+              setState(() {
+                _addTip = !_addTip;
+                if (!_addTip) {
+                  _tipAmount = 0;
+                  _selectedTipPreset = null;
+                  _tipController.clear();
+                } else if (_tipAmount == 0) {
+                  _setTipAmount(_tipPresets[1]);
+                }
+              });
+            },
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: Checkbox(
+                    value: _addTip,
+                    activeColor: HestiaColors.primary,
+                    side: BorderSide(color: Colors.grey.shade400),
+                    onChanged: (checked) {
+                      setState(() {
+                        _addTip = checked ?? false;
+                        if (!_addTip) {
+                          _tipAmount = 0;
+                          _selectedTipPreset = null;
+                          _tipController.clear();
+                        } else if (_tipAmount == 0) {
+                          _setTipAmount(_tipPresets[1]);
+                        }
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Icon(
+                  Icons.favorite_outline,
+                  color: HestiaColors.primary,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Tip $caregiverName',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: HestiaColors.textDark,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_addTip) ...[
+            const SizedBox(height: 8),
+            Text(
+              '100% of your tip goes directly to your caregiver.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _tipController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                hintText: 'Enter tip amount',
+                prefixText: '₹ ',
+                prefixStyle: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: HestiaColors.textDark,
+                ),
+                filled: true,
+                fillColor: const Color(0xFFFAF7F4),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                    color: HestiaColors.primary,
+                    width: 1.4,
+                  ),
+                ),
+              ),
+              onChanged: (value) {
+                final amount = int.tryParse(value.trim()) ?? 0;
+                setState(() {
+                  _tipAmount = amount;
+                  _selectedTipPreset =
+                      _tipPresets.contains(amount) ? amount : null;
+                });
+              },
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: _tipPresets.map((preset) {
+                final isSelected = _selectedTipPreset == preset;
+                return Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      right: preset == _tipPresets.last ? 0 : 8,
+                    ),
+                    child: OutlinedButton(
+                      onPressed: () => _setTipAmount(preset),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor:
+                            isSelected ? Colors.white : HestiaColors.primary,
+                        backgroundColor:
+                            isSelected ? HestiaColors.primary : Colors.white,
+                        side: BorderSide(
+                          color: HestiaColors.primary.withValues(alpha: 0.5),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        '₹$preset',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -97,7 +396,6 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
     final end = explicitEnd ?? start.add(Duration(minutes: (durationHours * 60).round()));
     final durationStr = _formatDuration(start, end, durationHours);
 
-    // Format start time
     String formatTime(DateTime time) {
       int hour = time.hour;
       final minute = time.minute.toString().padLeft(2, '0');
@@ -108,6 +406,10 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
     }
 
     final dateStr = 'Today · ${formatTime(start)} – ${formatTime(end)}';
+    final tip = _getTipAmount();
+    final submitLabel = tip > 0
+        ? 'Submit & pay ₹$tip tip'
+        : 'Submit feedback';
 
     return Container(
         color: HestiaColors.appBackground,
@@ -158,11 +460,10 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Caregiver Summary Card
                     Container(
                       padding: const EdgeInsets.all(16.0),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFAF2EB), // Warm beige container from screenshot
+                        color: const Color(0xFFFAF2EB),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: HestiaColors.primary.withValues(alpha: 0.1),
@@ -248,9 +549,11 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
                       ),
                     ),
 
+                    const SizedBox(height: 24),
+                    _buildTipSection(caregiverName),
+
                     const SizedBox(height: 28),
 
-                    // Overall Experience Header
                     const Center(
                       child: Text(
                         'Overall experience',
@@ -263,7 +566,6 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Gold Star Overall Selector
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: List.generate(5, (index) {
@@ -285,7 +587,6 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
 
                     const SizedBox(height: 28),
 
-                    // RATE BY CATEGORY Card Container
                     Container(
                       padding: const EdgeInsets.all(20.0),
                       decoration: BoxDecoration(
@@ -333,7 +634,6 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
 
                     const SizedBox(height: 24),
 
-                    // Selectable Tag Badges
                     Wrap(
                       spacing: 10,
                       runSpacing: 10,
@@ -375,7 +675,6 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
 
                     const SizedBox(height: 24),
 
-                    // Optional Comment Field
                     Container(
                       decoration: BoxDecoration(
                         color: const Color(0xFFFAF2EB).withValues(alpha: 0.3),
@@ -407,7 +706,6 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
               ),
             ),
 
-            // Submit Button Footer
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
               child: SizedBox(
@@ -422,10 +720,10 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
                     ),
                     elevation: 0,
                   ),
-                  onPressed: _submitFeedback,
-                  child: const Text(
-                    'Submit feedback',
-                    style: TextStyle(
+                  onPressed: _isSubmitting ? null : _submitFeedback,
+                  child: Text(
+                    submitLabel,
+                    style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
                     ),

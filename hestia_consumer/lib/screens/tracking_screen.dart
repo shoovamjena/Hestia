@@ -1,17 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../config/mapbox_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../utils/active_booking_navigation.dart';
 import 'activity_log_screen.dart';
-import 'session_complete_screen.dart';
+import 'rate_session_screen.dart';
 import 'chat_screen.dart';
 import 'emergency_screen.dart';
-import 'rate_session_screen.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/foundation.dart';
@@ -25,7 +26,8 @@ class TrackingScreen extends StatefulWidget {
   State<TrackingScreen> createState() => _TrackingScreenState();
 }
 
-class _TrackingScreenState extends State<TrackingScreen> {
+class _TrackingScreenState extends State<TrackingScreen>
+    with TickerProviderStateMixin {
   late Map<String, dynamic> _bookingData;
   final List<Map<String, dynamic>> _activityLogs = [];
   bool _isOnTheWayView = true;
@@ -34,9 +36,17 @@ class _TrackingScreenState extends State<TrackingScreen> {
   int _secondsElapsed = 5047; // starts around 01:24:07
   bool _isShowingVerificationDialog = false;
   bool _isApologizing = false;
+  bool _hasNavigatedToReview = false;
 
   RealtimeChannel? _realtimeChannel;
   RealtimeChannel? _activityChannel;
+  RealtimeChannel? _locationChannel;
+  RealtimeChannel? _chatChannel;
+  Timer? _activityPollTimer;
+  bool _isRefreshingActivityLogs = false;
+  String? _subscribedActivitySessionId;
+  String? _subscribedChatSessionId;
+  int _unreadChatCount = 0;
   String _enteredCode = '';
   String? _verificationError;
   bool _isStartingSession = false;
@@ -47,24 +57,123 @@ class _TrackingScreenState extends State<TrackingScreen> {
   LatLng? _hubLocation;
   LatLng? _userLocation;
   LatLng? _professionalLocation;
+  LatLng? _displayedProfessionalLocation;
+  LatLng? _lastRoutedFrom;
+  double _carBearingDegrees = 0;
+  AnimationController? _markerGlideController;
+  List<LatLng> _glidePath = const [];
+  List<double> _glideCumulativeKm = const [];
   Timer? _locationTimer;
+  Timer? _routeRedrawDebounce;
+  bool _routeFetchInFlight = false;
+  String? _subscribedLocationSessionId;
   List<LatLng> _routePoints = [];
+  List<double> _routeCumulativeKm = const [];
+  int _lastRouteProgressIndex = 0;
+  /// Full-route totals from the latest Mapbox directions response.
+  double _mapboxRouteDistanceKm = 0.0;
+  int _mapboxRouteDurationMin = 0;
   double _routeDistanceKm = 0.0;
   int _routeDurationMin = 0;
+  double _lastKnownSpeedKmPerMin = 0.35; // fallback ~21 km/h city traffic
+  DateTime? _lastMetricsUiUpdateAt;
   bool _isLoadingMap = true;
   final MapController _mapController = MapController();
+  final Distance _geoDistance = const Distance();
   LatLng? _currentMapCenter;
   double _currentMapZoom = 13.0;
+  /// Tight street-level follow while professional is on the way.
+  static const double _liveFollowZoom = 17.0;
   final DraggableScrollableController _onTheWaySheetController =
       DraggableScrollableController();
   bool _isOnTheWaySheetExpanded = false;
+
+  bool _isActiveSessionStatus(String? status) {
+    final s = status?.toString().trim().toLowerCase() ?? '';
+    return s == 'started' || s == 'active' || s == 'in_progress';
+  }
+
+  bool _isCompletedStatus(String? status) {
+    final s = status?.toString().trim().toLowerCase() ?? '';
+    return s == 'completed';
+  }
+
+  void _applyStatusToView(String? status) {
+    if (_isCompletedStatus(status) || _hasNavigatedToReview) {
+      // Stay on whatever view we had; navigation to review handles exit.
+      return;
+    }
+    _isOnTheWayView = !_isActiveSessionStatus(status);
+  }
+
+  void _goToReviewScreen({
+    Map<String, dynamic>? data,
+    bool force = false,
+  }) {
+    if (!mounted || _hasNavigatedToReview) return;
+    // While End Session owns the API call, ignore realtime/poll navigation.
+    if (_isEndingSession && !force) return;
+
+    _hasNavigatedToReview = true;
+    _isEndingSession = false;
+    _tearDownLiveSessionListeners();
+
+    final sessionData = Map<String, dynamic>.from(data ?? _bookingData);
+    sessionData['status'] = 'completed';
+    sessionData['caregiver_name'] =
+        sessionData['caregiver_name'] ?? 'Professional';
+    sessionData['title'] =
+        sessionData['title'] ?? sessionData['service_type'] ?? 'Care';
+
+    // Keep Home underneath; never leave Tracking in the stack under Rate.
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => RateSessionScreen(sessionData: sessionData),
+      ),
+      (route) => route.isFirst,
+    );
+  }
+
+  void _tearDownLiveSessionListeners() {
+    _statusTimer?.cancel();
+    _statusTimer = null;
+    _locationTimer?.cancel();
+    _locationTimer = null;
+    _activityPollTimer?.cancel();
+    _activityPollTimer = null;
+    _routeRedrawDebounce?.cancel();
+    _routeRedrawDebounce = null;
+    try {
+      _stopwatchTimer.cancel();
+    } catch (_) {}
+    try {
+      _markerGlideController?.stop();
+    } catch (_) {}
+
+    if (_realtimeChannel != null) {
+      SupabaseService.client.removeChannel(_realtimeChannel!);
+      _realtimeChannel = null;
+    }
+    if (_activityChannel != null) {
+      SupabaseService.client.removeChannel(_activityChannel!);
+      _activityChannel = null;
+    }
+    if (_locationChannel != null) {
+      SupabaseService.client.removeChannel(_locationChannel!);
+      _locationChannel = null;
+    }
+    if (_chatChannel != null) {
+      SupabaseService.client.removeChannel(_chatChannel!);
+      _chatChannel = null;
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _bookingData = Map<String, dynamic>.from(widget.bookingData);
-    final status = _bookingData['status'];
-    _isOnTheWayView = !(status == 'started' || status == 'active' || status == 'in_progress');
+    final status = _bookingData['status']?.toString();
+    _isOnTheWayView = !_isActiveSessionStatus(status);
     _startStopwatch();
     _startStatusPolling();
     _loadRouteAndCoordinates();
@@ -72,49 +181,58 @@ class _TrackingScreenState extends State<TrackingScreen> {
     _initRealtimeSubscription();
     _subscribeToActivityLogs();
     _startLocationTracking();
+    _subscribeToChatUnread();
+    _refreshUnreadChatCount();
+    _activityPollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      _loadActivityLogs(silent: true);
+    });
 
-    // Check for no-show immediately on launch
+    // Check for no-show / already-completed immediately on launch
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_isCompletedStatus(_bookingData['status'])) {
+        _goToReviewScreen(data: _bookingData);
+        return;
+      }
       _checkNoShowAndApologize(_bookingData);
     });
   }
 
   @override
   void dispose() {
-    _stopwatchTimer.cancel();
-    _statusTimer?.cancel();
-    _locationTimer?.cancel();
+    _tearDownLiveSessionListeners();
+    _markerGlideController?.dispose();
     _codeController.dispose();
     _codeFocusNode.dispose();
     _onTheWaySheetController.dispose();
-    if (_realtimeChannel != null) {
-      SupabaseService.client.removeChannel(_realtimeChannel!);
-    }
-    if (_activityChannel != null) {
-      SupabaseService.client.removeChannel(_activityChannel!);
-    }
     super.dispose();
   }
 
   void _startStatusPolling() {
+    _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (_hasNavigatedToReview || _isEndingSession || !mounted) {
+        timer.cancel();
+        return;
+      }
       final bookingId = _bookingData['booking_id'];
       if (bookingId != null) {
         final updated = await SupabaseService.getBookingStatus(bookingId.toString());
-        if (updated != null && mounted) {
+        if (_hasNavigatedToReview || _isEndingSession || !mounted) return;
+        if (updated != null) {
           final previousRouteMode = _shouldRouteFromProfessionalLiveLocation();
           final shouldLoadRoute = _hubLocation == null &&
               (updated['hub_address'] != null || updated['user_address'] != null);
           setState(() {
             _bookingData = updated;
-            final status = _bookingData['status'];
-            final isSessionActive = (status == 'started' || status == 'active' || status == 'in_progress');
-            if (isSessionActive) {
-              _isOnTheWayView = false;
-            } else {
-              _isOnTheWayView = true;
-            }
+            _applyStatusToView(_bookingData['status']?.toString());
           });
+          // Session id may appear after start — ensure live log sync is attached.
+          _subscribeToActivityLogs();
+          _subscribeToChatUnread();
+          if (_isCompletedStatus(updated['status'])) {
+            _goToReviewScreen(data: updated);
+            return;
+          }
           final routeModeChanged = previousRouteMode !=
               _shouldRouteFromProfessionalLiveLocation();
           if (shouldLoadRoute || routeModeChanged) {
@@ -128,22 +246,28 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _startStopwatch() {
+    try {
+      _stopwatchTimer.cancel();
+    } catch (_) {}
     _stopwatchTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
-        setState(() {
-          final actualStartObj = _bookingData['actual_start'];
-          if (actualStartObj != null) {
-            final startTime = actualStartObj is DateTime 
-                ? actualStartObj 
-                : DateTime.parse(actualStartObj.toString());
-            // Elapsed time count up from start_time
-            _secondsElapsed = DateTime.now().toUtc().difference(startTime.toUtc()).inSeconds;
-            if (_secondsElapsed < 0) _secondsElapsed = 0;
-          } else {
-            _secondsElapsed = 0;
-          }
-        });
+      if (_hasNavigatedToReview || _isEndingSession || !mounted) {
+        timer.cancel();
+        return;
       }
+      setState(() {
+        final actualStartObj = _bookingData['actual_start'];
+        if (actualStartObj != null) {
+          final startTime = actualStartObj is DateTime
+              ? actualStartObj
+              : DateTime.parse(actualStartObj.toString());
+          // Elapsed time count up from start_time
+          _secondsElapsed =
+              DateTime.now().toUtc().difference(startTime.toUtc()).inSeconds;
+          if (_secondsElapsed < 0) _secondsElapsed = 0;
+        } else {
+          _secondsElapsed = 0;
+        }
+      });
     });
   }
 
@@ -315,8 +439,12 @@ class _TrackingScreenState extends State<TrackingScreen> {
   void _checkNoShowAndApologize(Map<String, dynamic> bookingData) {
     final status = bookingData['status']?.toString().toLowerCase();
 
-    // If the session has already started, arrived, or is complete, no check needed
-    if (status == 'arrived' || status == 'active' || status == 'in_progress' || status == 'completed') {
+    // Session already with the client or finished — no apology flow.
+    if (status == 'arrived' ||
+        status == 'active' ||
+        status == 'in_progress' ||
+        status == 'started' ||
+        status == 'completed') {
       return;
     }
 
@@ -327,10 +455,13 @@ class _TrackingScreenState extends State<TrackingScreen> {
         ? scheduledStartObj
         : DateTime.parse(scheduledStartObj.toString());
 
-    final double durationHours = (bookingData['duration_hours'] as num?)?.toDouble() ?? 2.0;
-    final scheduledEnd = scheduledStart.add(Duration(minutes: (durationHours * 60).round()));
+    final double durationHours =
+        (bookingData['duration_hours'] as num?)?.toDouble() ?? 2.0;
+    final scheduledEnd =
+        scheduledStart.add(Duration(minutes: (durationHours * 60).round()));
 
-    // Check if current time is past the scheduled slot window
+    // Late past start is OK — keep scheduled / on-the-way screens.
+    // Only no-show after the full booked window ends.
     if (DateTime.now().isAfter(scheduledEnd)) {
       _showNoShowApologyAndRedirect(bookingData);
     }
@@ -428,12 +559,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     'scheduled_start': scheduledStart,
                   };
 
-                  // Redirect to RateSessionScreen and pop current route
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(
-                      builder: (context) => RateSessionScreen(sessionData: sessionData),
-                    ),
-                  );
+                  // Redirect to RateSessionScreen and clear Tracking from stack
+                  _goToReviewScreen(data: sessionData);
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: HestiaColors.primary,
@@ -537,7 +664,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   bool _shouldRouteFromProfessionalLiveLocation() {
     final status = _normalizedTrackingStatus();
-    return status == 'transit' ||
+    return status == 'departed' ||
+        status == 'transit' ||
+        status == 'en_route' ||
         status == 'arrived' ||
         status == 'started' ||
         status == 'active' ||
@@ -545,25 +674,516 @@ class _TrackingScreenState extends State<TrackingScreen> {
         status == 'completed';
   }
 
+  Future<void> _ensureSessionId() async {
+    final existing = _bookingData['session_id']?.toString();
+    if (existing != null && existing.isNotEmpty) return;
+    final bookingId = _bookingData['booking_id']?.toString();
+    if (bookingId == null || bookingId.isEmpty) return;
+    try {
+      final updated = await SupabaseService.getBookingStatus(bookingId);
+      final sessionId = updated?['session_id']?.toString();
+      if (sessionId != null &&
+          sessionId.isNotEmpty &&
+          mounted) {
+        setState(() {
+          _bookingData = {..._bookingData, ...updated!};
+        });
+        if (_locationChannel == null ||
+            _subscribedLocationSessionId != sessionId) {
+          _startLocationTracking();
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<bool> _refreshProfessionalLocation() async {
+    await _ensureSessionId();
+    final sessionId = _bookingData['session_id']?.toString();
+    final professionalId = _bookingData['professional_id']?.toString();
+    if ((sessionId == null || sessionId.isEmpty) &&
+        (professionalId == null || professionalId.isEmpty)) {
+      return false;
+    }
+
+    final latestLoc = await SupabaseService.getLatestProfessionalLocation(
+      sessionId,
+      professionalId: professionalId,
+    );
+    if (latestLoc == null || !mounted) return false;
+
+    final next = LatLng(latestLoc['latitude']!, latestLoc['longitude']!);
+    return _applyProfessionalLocation(next);
+  }
+
+  /// Keep the map locked on the professional pin (no free zoom/pan).
+  void _centerMapOnLivePin(LatLng point) {
+    if (!_isOnTheWayView || !mounted) return;
+    _currentMapCenter = point;
+    _currentMapZoom = _liveFollowZoom;
+    try {
+      _mapController.move(point, _liveFollowZoom);
+    } catch (_) {
+      // MapController may not be ready on the first fix.
+    }
+  }
+
+  /// Updates the live target and glides the car marker smoothly toward it.
+  bool _applyProfessionalLocation(LatLng next) {
+    if (!mounted) return false;
+    final previousTarget = _professionalLocation;
+    final moved = previousTarget == null ||
+        (previousTarget.latitude - next.latitude).abs() > 0.000001 ||
+        (previousTarget.longitude - next.longitude).abs() > 0.000001;
+    if (!moved) return false;
+
+    _professionalLocation = next;
+    _recomputeLiveMetrics(next);
+    _startMarkerGlide(to: next);
+    return true;
+  }
+
+  /// Distance/ETA from Mapbox route + forward progress along the polyline.
+  void _recomputeLiveMetrics(LatLng current, {bool forceUi = false}) {
+    final now = DateTime.now();
+    if (!forceUi &&
+        _lastMetricsUiUpdateAt != null &&
+        now.difference(_lastMetricsUiUpdateAt!) <
+            const Duration(milliseconds: 180)) {
+      return;
+    }
+    _lastMetricsUiUpdateAt = now;
+
+    final metrics = _remainingRouteMetrics(current);
+    if (!mounted) {
+      _routeDistanceKm = metrics.km;
+      _routeDurationMin = metrics.min;
+      return;
+    }
+    setState(() {
+      _routeDistanceKm = metrics.km;
+      _routeDurationMin = metrics.min;
+    });
+  }
+
+  void _applyMapboxRoute({
+    required List<LatLng> points,
+    required double distanceKm,
+    required int durationMin,
+    required LatLng routedFrom,
+  }) {
+    _routePoints = points;
+    _routeCumulativeKm = _buildCumulativeDistancesKm(points);
+    _lastRouteProgressIndex = 0;
+    _mapboxRouteDistanceKm = distanceKm;
+    _mapboxRouteDurationMin = durationMin;
+    _routeDistanceKm = distanceKm;
+    _routeDurationMin = durationMin;
+    _lastRoutedFrom = routedFrom;
+    if (durationMin > 0) {
+      _lastKnownSpeedKmPerMin = distanceKm / durationMin;
+    }
+  }
+
+  ({double km, int min}) _remainingRouteMetrics(LatLng current) {
+    // Stale polyline while a fresh Mapbox fetch is in flight — keep last totals.
+    if (_routeFetchInFlight &&
+        _lastRoutedFrom != null &&
+        _hasMeaningfulRouteMove(_lastRoutedFrom!, current) &&
+        _mapboxRouteDistanceKm > 0) {
+      return (km: _routeDistanceKm, min: _routeDurationMin);
+    }
+
+    if (_routePoints.length >= 2 && _mapboxRouteDistanceKm > 0) {
+      final idx = _routeProgressIndex(current);
+      final remainingKm = _remainingKmAlongRoute(current, idx);
+      final remainingMin = _etaMinutesForRemainingKm(remainingKm);
+      return (km: remainingKm, min: remainingMin);
+    }
+
+    // Before the first route draw, use Mapbox totals if we have them.
+    if (_mapboxRouteDistanceKm > 0) {
+      return (km: _mapboxRouteDistanceKm, min: _mapboxRouteDurationMin);
+    }
+
+    // Last resort: straight-line to destination (no artificial 50 m floor).
+    final destination = _userLocation;
+    if (destination != null) {
+      final straight = _geoDistance.as(
+        LengthUnit.Kilometer,
+        current,
+        destination,
+      );
+      if (straight > 0.001) {
+        return (
+          km: straight,
+          min: _etaMinutesForRemainingKm(straight, useSpeedFallback: true),
+        );
+      }
+    }
+
+    return (km: _routeDistanceKm, min: _routeDurationMin);
+  }
+
+  int _routeProgressIndex(LatLng point) {
+    if (_routePoints.isEmpty) return 0;
+
+    // Search forward from last known progress so we never snap to the destination end.
+    final searchStart = math.max(0, _lastRouteProgressIndex - 4);
+    var bestIdx = searchStart;
+    var bestKm = double.infinity;
+    for (var i = searchStart; i < _routePoints.length; i++) {
+      final km = _geoDistance.as(LengthUnit.Kilometer, point, _routePoints[i]);
+      if (km < bestKm) {
+        bestKm = km;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx >= _lastRouteProgressIndex - 4) {
+      _lastRouteProgressIndex = math.max(_lastRouteProgressIndex, bestIdx);
+    }
+    return _lastRouteProgressIndex;
+  }
+
+  double _remainingKmAlongRoute(LatLng current, int idx) {
+    if (_routePoints.isEmpty) return _mapboxRouteDistanceKm;
+    idx = idx.clamp(0, _routePoints.length - 1);
+
+    if (_routeCumulativeKm.length == _routePoints.length) {
+      final total = _routeCumulativeKm.last;
+      final passed = _routeCumulativeKm[idx];
+      final offset = _geoDistance.as(
+        LengthUnit.Kilometer,
+        current,
+        _routePoints[idx],
+      );
+      return math.max(0, total - passed + offset);
+    }
+
+    var remaining = _geoDistance.as(
+      LengthUnit.Kilometer,
+      current,
+      _routePoints[idx],
+    );
+    for (var i = idx; i < _routePoints.length - 1; i++) {
+      remaining += _geoDistance.as(
+        LengthUnit.Kilometer,
+        _routePoints[i],
+        _routePoints[i + 1],
+      );
+    }
+    return math.max(0, remaining);
+  }
+
+  int _etaMinutesForRemainingKm(
+    double remainingKm, {
+    bool useSpeedFallback = false,
+  }) {
+    if (remainingKm <= 0.001) return 1;
+
+    if (!useSpeedFallback &&
+        _mapboxRouteDistanceKm > 0 &&
+        _mapboxRouteDurationMin > 0) {
+      final ratio = remainingKm / _mapboxRouteDistanceKm;
+      return math.max(1, (_mapboxRouteDurationMin * ratio).round());
+    }
+
+    final speed = _lastKnownSpeedKmPerMin > 0.05
+        ? _lastKnownSpeedKmPerMin
+        : 0.35;
+    return math.max(1, (remainingKm / speed).round());
+  }
+
+  void _startMarkerGlide({required LatLng to}) {
+    final from = _displayedProfessionalLocation ?? to;
+
+    // First fix: snap into place (no jump animation from null).
+    if (_displayedProfessionalLocation == null) {
+      setState(() {
+        _displayedProfessionalLocation = to;
+        _carBearingDegrees = 0;
+      });
+      _recomputeLiveMetrics(to, forceUi: true);
+      _centerMapOnLivePin(to);
+      return;
+    }
+
+    final distanceKm = _geoDistance.as(LengthUnit.Kilometer, from, to);
+    if (distanceKm < 0.003) {
+      setState(() {
+        _displayedProfessionalLocation = to;
+      });
+      _recomputeLiveMetrics(to, forceUi: true);
+      _centerMapOnLivePin(to);
+      return;
+    }
+
+    _glidePath = _buildGlidePath(from, to);
+    _glideCumulativeKm = _buildCumulativeDistancesKm(_glidePath);
+
+    final durationMs = (distanceKm * 9000).clamp(700, 3200).round();
+    _markerGlideController?.dispose();
+    _markerGlideController = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: durationMs),
+    )..addListener(() {
+        if (!mounted || _glidePath.isEmpty) return;
+        final t = Curves.easeInOutCubic.transform(
+          _markerGlideController!.value,
+        );
+        final point = _pointAlongGlidePath(t);
+        final prev = _displayedProfessionalLocation ?? point;
+        final bearing = _bearingDegrees(prev, point);
+        setState(() {
+          _displayedProfessionalLocation = point;
+          if ((prev.latitude - point.latitude).abs() > 0.0000005 ||
+              (prev.longitude - point.longitude).abs() > 0.0000005) {
+            _carBearingDegrees = bearing;
+          }
+        });
+        _centerMapOnLivePin(point);
+      })
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted) {
+          setState(() {
+            _displayedProfessionalLocation = to;
+          });
+          _recomputeLiveMetrics(to, forceUi: true);
+          _centerMapOnLivePin(to);
+        }
+      })
+      ..forward(from: 0);
+  }
+
+  List<LatLng> _buildGlidePath(LatLng from, LatLng to) {
+    if (_routePoints.length < 2) {
+      return _densifyStraightPath(from, to);
+    }
+
+    final fromIdx = _nearestRouteIndex(from);
+    final toIdx = _nearestRouteIndex(to);
+
+    // Prefer gliding forward along the drawn route toward the destination.
+    if (toIdx > fromIdx && (toIdx - fromIdx) >= 1) {
+      final segment = <LatLng>[from];
+      segment.addAll(_routePoints.sublist(fromIdx, toIdx + 1));
+      if (segment.last != to) segment.add(to);
+      return _densifyPath(segment);
+    }
+
+    return _densifyStraightPath(from, to);
+  }
+
+  List<LatLng> _densifyStraightPath(LatLng from, LatLng to) {
+    const steps = 24;
+    return List<LatLng>.generate(steps + 1, (i) {
+      final t = i / steps;
+      return LatLng(
+        from.latitude + (to.latitude - from.latitude) * t,
+        from.longitude + (to.longitude - from.longitude) * t,
+      );
+    });
+  }
+
+  List<LatLng> _densifyPath(List<LatLng> points) {
+    if (points.length < 2) return points;
+    final densified = <LatLng>[points.first];
+    for (var i = 1; i < points.length; i++) {
+      final a = densified.last;
+      final b = points[i];
+      final segmentKm = _geoDistance.as(LengthUnit.Kilometer, a, b);
+      final steps = (segmentKm / 0.02).ceil().clamp(1, 12); // ~20m steps
+      for (var s = 1; s <= steps; s++) {
+        final t = s / steps;
+        densified.add(
+          LatLng(
+            a.latitude + (b.latitude - a.latitude) * t,
+            a.longitude + (b.longitude - a.longitude) * t,
+          ),
+        );
+      }
+    }
+    return densified;
+  }
+
+  List<double> _buildCumulativeDistancesKm(List<LatLng> points) {
+    if (points.isEmpty) return const [];
+    final cumulative = <double>[0];
+    for (var i = 1; i < points.length; i++) {
+      cumulative.add(
+        cumulative.last +
+            _geoDistance.as(LengthUnit.Kilometer, points[i - 1], points[i]),
+      );
+    }
+    return cumulative;
+  }
+
+  LatLng _pointAlongGlidePath(double t) {
+    if (_glidePath.isEmpty) {
+      return _displayedProfessionalLocation ??
+          _professionalLocation ??
+          const LatLng(0, 0);
+    }
+    if (_glidePath.length == 1 || _glideCumulativeKm.isEmpty) {
+      return _glidePath.first;
+    }
+    final total = _glideCumulativeKm.last;
+    if (total <= 0) return _glidePath.last;
+    final target = (t.clamp(0.0, 1.0)) * total;
+
+    for (var i = 1; i < _glideCumulativeKm.length; i++) {
+      if (target <= _glideCumulativeKm[i]) {
+        final startKm = _glideCumulativeKm[i - 1];
+        final endKm = _glideCumulativeKm[i];
+        final span = (endKm - startKm).abs();
+        final localT = span <= 0 ? 1.0 : ((target - startKm) / span);
+        final a = _glidePath[i - 1];
+        final b = _glidePath[i];
+        return LatLng(
+          a.latitude + (b.latitude - a.latitude) * localT,
+          a.longitude + (b.longitude - a.longitude) * localT,
+        );
+      }
+    }
+    return _glidePath.last;
+  }
+
+  int _nearestRouteIndex(LatLng point) {
+    var bestIdx = 0;
+    var bestKm = double.infinity;
+    for (var i = 0; i < _routePoints.length; i++) {
+      final km = _geoDistance.as(LengthUnit.Kilometer, point, _routePoints[i]);
+      if (km < bestKm) {
+        bestKm = km;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }
+
+  double _bearingDegrees(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180;
+    final lat2 = to.latitude * math.pi / 180;
+    final dLon = (to.longitude - from.longitude) * math.pi / 180;
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    final bearing = math.atan2(y, x) * 180 / math.pi;
+    return (bearing + 360) % 360;
+  }
+
+  void _scheduleLiveRouteRedraw({bool immediate = false}) {
+    if (!_shouldRouteFromProfessionalLiveLocation()) return;
+    if (_professionalLocation == null) return;
+
+    _routeRedrawDebounce?.cancel();
+    if (immediate) {
+      unawaited(_redrawRouteFromLiveLocation());
+      return;
+    }
+    _routeRedrawDebounce = Timer(const Duration(milliseconds: 650), () {
+      unawaited(_redrawRouteFromLiveLocation());
+    });
+  }
+
+  bool _hasMeaningfulRouteMove(LatLng from, LatLng to) {
+    // ~12 meters — refresh driving ETA/path often enough.
+    final dLat = (from.latitude - to.latitude).abs();
+    final dLng = (from.longitude - to.longitude).abs();
+    return dLat > 0.00011 || dLng > 0.00011 || _routePoints.isEmpty;
+  }
+
+  Future<void> _redrawRouteFromLiveLocation() async {
+    if (!mounted || _routeFetchInFlight) return;
+    final startLoc = _professionalLocation;
+    final userLoc = _userLocation;
+    if (startLoc == null) return;
+
+    // Ensure destination exists; geocode once if needed.
+    LatLng? destination = userLoc;
+    if (destination == null) {
+      final userAddr = _bookingData['user_address']?.toString() ?? '';
+      if (userAddr.isEmpty) return;
+      destination = await _geocodeAddress(userAddr);
+      if (destination == null || !mounted) return;
+      setState(() => _userLocation = destination);
+    }
+
+    if (_lastRoutedFrom != null &&
+        !_hasMeaningfulRouteMove(_lastRoutedFrom!, startLoc) &&
+        _routePoints.isNotEmpty) {
+      _recomputeLiveMetrics(startLoc, forceUi: true);
+      return;
+    }
+
+    _routeFetchInFlight = true;
+    try {
+      final url =
+          'https://api.mapbox.com/directions/v5/mapbox/driving/${startLoc.longitude},${startLoc.latitude};${destination.longitude},${destination.latitude}?geometries=geojson&overview=full&access_token=${MapboxConfig.accessToken}';
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 6);
+      try {
+        final request = await client.getUrl(Uri.parse(url));
+        final response =
+            await request.close().timeout(const Duration(seconds: 10));
+        final body = await response.transform(utf8.decoder).join();
+        final data = jsonDecode(body) as Map<String, dynamic>;
+        final routes = data['routes'] as List?;
+        if (routes != null && routes.isNotEmpty && mounted) {
+          final route = routes.first as Map<String, dynamic>;
+          final geometry = route['geometry'] as Map<String, dynamic>;
+          final coordinates = geometry['coordinates'] as List;
+          final distance = route['distance'] as num;
+          final duration = route['duration'] as num;
+          final distKm = distance / 1000.0;
+          final durMin = math.max(1, (duration / 60.0).round());
+          setState(() {
+            _applyMapboxRoute(
+              points: coordinates
+                  .map((c) => LatLng(c[1] as double, c[0] as double))
+                  .toList(),
+              distanceKm: distKm,
+              durationMin: durMin,
+              routedFrom: startLoc,
+            );
+            _lastMetricsUiUpdateAt = DateTime.now();
+            _isLoadingMap = false;
+          });
+          _recomputeLiveMetrics(startLoc, forceUi: true);
+          _centerMapOnLivePin(
+            _displayedProfessionalLocation ?? startLoc,
+          );
+        }
+      } finally {
+        client.close(force: true);
+      }
+    } catch (e) {
+      debugPrint('Live route redraw failed: $e');
+      _recomputeLiveMetrics(startLoc, forceUi: true);
+    } finally {
+      _routeFetchInFlight = false;
+    }
+  }
+
   LatLng? _getRouteStartLocation() {
-    if (_shouldRouteFromProfessionalLiveLocation() &&
-        _professionalLocation != null) {
-      return _professionalLocation;
+    // Once the professional has left the hub, always route from their live pin.
+    if (_shouldRouteFromProfessionalLiveLocation()) {
+      return _displayedProfessionalLocation ?? _professionalLocation;
     }
     return _hubLocation;
   }
 
   String _formatRouteSourceLabel() {
-    if (_shouldRouteFromProfessionalLiveLocation() &&
-        _professionalLocation != null) {
-      final lat = _professionalLocation!.latitude.toStringAsFixed(5);
-      final lng = _professionalLocation!.longitude.toStringAsFixed(5);
-      return 'Professional live location ($lat, $lng)';
+    if (_shouldRouteFromProfessionalLiveLocation()) {
+      if (_professionalLocation != null) {
+        return "Professional's live location";
+      }
+      return 'Waiting for professional live location';
     }
     if ((_bookingData['hub_name']?.toString().trim().isNotEmpty ?? false)) {
       return '${_bookingData['hub_name']} hub';
     }
-    return 'Professional location unavailable';
+    return 'Hub location';
   }
 
   String _formatRouteDestinationLabel() {
@@ -592,8 +1212,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
   Future<void> _loadRouteAndCoordinates() async {
     final hubAddr = _bookingData['hub_address']?.toString() ?? '';
     final userAddr = _bookingData['user_address']?.toString() ?? '';
-    
-    if (hubAddr.isEmpty || userAddr.isEmpty) {
+
+    if (userAddr.isEmpty) {
       if (mounted) {
         setState(() {
           _isLoadingMap = false;
@@ -601,61 +1221,102 @@ class _TrackingScreenState extends State<TrackingScreen> {
       }
       return;
     }
-    
-    final hubLoc = _hubLocation ?? await _geocodeAddress(hubAddr);
+
+    // Always refresh live professional coordinates before drawing the route.
+    if (_shouldRouteFromProfessionalLiveLocation()) {
+      await _refreshProfessionalLocation();
+    }
+
+    final hubLoc = hubAddr.isEmpty
+        ? _hubLocation
+        : (_hubLocation ?? await _geocodeAddress(hubAddr));
     final userLoc = _userLocation ?? await _geocodeAddress(userAddr);
-    
-    if (hubLoc != null && userLoc != null) {
+
+    if (userLoc == null) {
       if (mounted) {
         setState(() {
-          _hubLocation = hubLoc;
-          _userLocation = userLoc;
+          _isLoadingMap = false;
         });
       }
-      
-      // If we don't have a professional location in memory yet, try to load the latest from the database
-      if (_professionalLocation == null) {
-        final sessionId = _bookingData['session_id'];
-        if (sessionId != null) {
-          final latestLoc = await SupabaseService.getLatestProfessionalLocation(sessionId.toString());
-          if (latestLoc != null && mounted) {
-            setState(() {
-              _professionalLocation = LatLng(latestLoc['latitude']!, latestLoc['longitude']!);
-            });
-          }
-        }
-      }
-
-      final startLoc = _getRouteStartLocation() ?? hubLoc;
-
-      // Fetch Route from Mapbox Directions API
-      try {
-        final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/${startLoc.longitude},${startLoc.latitude};${userLoc.longitude},${userLoc.latitude}?geometries=geojson&access_token=${MapboxConfig.accessToken}';
-        final response = await HttpClient().getUrl(Uri.parse(url)).then((req) => req.close()).then((res) => res.transform(utf8.decoder).join());
-        final data = jsonDecode(response) as Map<String, dynamic>;
-        final routes = data['routes'] as List?;
-        if (routes != null && routes.isNotEmpty) {
-          final route = routes.first as Map<String, dynamic>;
-          final geometry = route['geometry'] as Map<String, dynamic>;
-          final coordinates = geometry['coordinates'] as List;
-          final distance = route['distance'] as num; // meters
-          final duration = route['duration'] as num; // seconds
-          
-          if (mounted) {
-            setState(() {
-              _routePoints = coordinates.map((c) => LatLng(c[1] as double, c[0] as double)).toList();
-              _routeDistanceKm = distance / 1000.0;
-              _routeDurationMin = (duration / 60.0).round();
-              _isLoadingMap = false;
-            });
-          }
-          return;
-        }
-      } catch (e) {
-        debugPrint('Error getting directions: $e');
-      }
+      return;
     }
-    
+
+    if (mounted) {
+      setState(() {
+        if (hubLoc != null) _hubLocation = hubLoc;
+        _userLocation = userLoc;
+      });
+    }
+
+    if (_shouldRouteFromProfessionalLiveLocation()) {
+      if (_professionalLocation == null) {
+        if (mounted) {
+          setState(() {
+            _routePoints = [];
+            _routeDistanceKm = 0;
+            _routeDurationMin = 0;
+            _isLoadingMap = false;
+          });
+        }
+        return;
+      }
+      await _redrawRouteFromLiveLocation();
+      return;
+    }
+
+    final LatLng? startLoc = _professionalLocation ?? hubLoc;
+    if (startLoc == null) {
+      if (mounted) {
+        setState(() {
+          _isLoadingMap = false;
+        });
+      }
+      return;
+    }
+
+    try {
+      final url =
+          'https://api.mapbox.com/directions/v5/mapbox/driving/${startLoc.longitude},${startLoc.latitude};${userLoc.longitude},${userLoc.latitude}?geometries=geojson&access_token=${MapboxConfig.accessToken}';
+      final response = await HttpClient()
+          .getUrl(Uri.parse(url))
+          .then((req) => req.close())
+          .then((res) => res.transform(utf8.decoder).join());
+      final data = jsonDecode(response) as Map<String, dynamic>;
+      final routes = data['routes'] as List?;
+      if (routes != null && routes.isNotEmpty) {
+        final route = routes.first as Map<String, dynamic>;
+        final geometry = route['geometry'] as Map<String, dynamic>;
+        final coordinates = geometry['coordinates'] as List;
+        final distance = route['distance'] as num;
+        final duration = route['duration'] as num;
+
+        if (mounted) {
+          final distKm = distance / 1000.0;
+          final durMin = math.max(1, (duration / 60.0).round());
+          setState(() {
+            _applyMapboxRoute(
+              points: coordinates
+                  .map((c) => LatLng(c[1] as double, c[0] as double))
+                  .toList(),
+              distanceKm: distKm,
+              durationMin: durMin,
+              routedFrom: startLoc,
+            );
+            _isLoadingMap = false;
+          });
+          _recomputeLiveMetrics(startLoc, forceUi: true);
+          _centerMapOnLivePin(
+            _displayedProfessionalLocation ??
+                _professionalLocation ??
+                startLoc,
+          );
+        }
+        return;
+      }
+    } catch (e) {
+      debugPrint('Error getting directions: $e');
+    }
+
     if (mounted) {
       setState(() {
         _isLoadingMap = false;
@@ -669,8 +1330,8 @@ class _TrackingScreenState extends State<TrackingScreen> {
         child: CircularProgressIndicator(color: HestiaColors.primary),
       );
     }
-    
-    if (_hubLocation == null || _userLocation == null) {
+
+    if (_userLocation == null) {
       return const Center(
         child: Text(
           'Map data unavailable',
@@ -678,23 +1339,41 @@ class _TrackingScreenState extends State<TrackingScreen> {
         ),
       );
     }
-    
-    final LatLng startLoc = _getRouteStartLocation() ?? _hubLocation!;
-    final mapCenter = _currentMapCenter ??
-        LatLng(
-          (startLoc.latitude + _userLocation!.latitude) / 2,
-          (startLoc.longitude + _userLocation!.longitude) / 2,
-        );
-    
+
+    final LatLng? startLoc = _getRouteStartLocation();
+    final LatLng? livePin =
+        _displayedProfessionalLocation ?? _professionalLocation ?? startLoc;
+
+    // On-the-way: lock tightly on the professional (or hub) icon.
+    final LatLng mapCenter;
+    final double mapZoom;
+    if (_isOnTheWayView) {
+      mapCenter = livePin ?? _userLocation!;
+      mapZoom = _liveFollowZoom;
+      _currentMapCenter = mapCenter;
+      _currentMapZoom = mapZoom;
+    } else {
+      mapCenter = _currentMapCenter ??
+          (startLoc != null
+              ? LatLng(
+                  (startLoc.latitude + _userLocation!.latitude) / 2,
+                  (startLoc.longitude + _userLocation!.longitude) / 2,
+                )
+              : _userLocation!);
+      mapZoom = _currentMapZoom;
+    }
+
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
         initialCenter: mapCenter,
-        initialZoom: _currentMapZoom,
-        interactionOptions: const InteractionOptions(
-          flags: InteractiveFlag.all,
+        initialZoom: mapZoom,
+        interactionOptions: InteractionOptions(
+          // No pinch/scroll zoom or pan while following the pro.
+          flags: _isOnTheWayView ? InteractiveFlag.none : InteractiveFlag.all,
         ),
         onPositionChanged: (position, hasGesture) {
+          if (_isOnTheWayView) return;
           _currentMapCenter = position.center;
           _currentMapZoom = position.zoom;
         },
@@ -718,19 +1397,43 @@ class _TrackingScreenState extends State<TrackingScreen> {
           ),
         MarkerLayer(
           markers: [
-            Marker(
-              point: startLoc,
-              width: 40,
-              height: 40,
-              child: Icon(
-                _shouldRouteFromProfessionalLiveLocation() &&
-                        _professionalLocation != null
-                    ? Icons.directions_car_rounded
-                    : Icons.store_mall_directory_rounded,
-                color: HestiaColors.primary,
-                size: 30,
+            if (startLoc != null)
+              Marker(
+                point: startLoc,
+                width: 48,
+                height: 48,
+                alignment: Alignment.center,
+                child: _shouldRouteFromProfessionalLiveLocation()
+                    ? Transform.rotate(
+                        // Icon points up by default; rotate to travel bearing.
+                        angle: (_carBearingDegrees - 90) * math.pi / 180,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: HestiaColors.primary,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: HestiaColors.primary
+                                    .withValues(alpha: 0.35),
+                                blurRadius: 10,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: const Icon(
+                            Icons.navigation_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                        ),
+                      )
+                    : const Icon(
+                        Icons.store_mall_directory_rounded,
+                        color: HestiaColors.primary,
+                        size: 30,
+                      ),
               ),
-            ),
             Marker(
               point: _userLocation!,
               width: 40,
@@ -815,10 +1518,86 @@ class _TrackingScreenState extends State<TrackingScreen> {
     }
   }
 
-  Future<void> _loadActivityLogs() async {
+  Future<void> _refreshUnreadChatCount() async {
+    final sessionId = _bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) return;
+    final count = await SupabaseService.getUnreadChatCount(sessionId);
+    if (!mounted) return;
+    if (count != _unreadChatCount) {
+      setState(() => _unreadChatCount = count);
+    }
+  }
+
+  void _subscribeToChatUnread() {
+    final sessionId = _bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) return;
+    if (_subscribedChatSessionId == sessionId && _chatChannel != null) {
+      return;
+    }
+
+    if (_chatChannel != null) {
+      SupabaseService.client.removeChannel(_chatChannel!);
+      _chatChannel = null;
+    }
+
+    _subscribedChatSessionId = sessionId;
+    _chatChannel = SupabaseService.client
+        .channel('tracking_chat_unread_$sessionId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'session_id',
+            value: sessionId,
+          ),
+          callback: (payload) {
+            final record = Map<String, dynamic>.from(payload.newRecord);
+            if (!SupabaseService.isInboundChatMessage(record)) return;
+            if (!mounted) return;
+            setState(() => _unreadChatCount += 1);
+          },
+        )
+        .subscribe((status, [error]) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            _refreshUnreadChatCount();
+          }
+        });
+  }
+
+  String _activityLogKey(Map<String, dynamic> log) {
+    final id = log['id']?.toString();
+    if (id != null && id.isNotEmpty) return id;
+    return '${log['logged_at']}|${log['activity_type']}|${log['note']}';
+  }
+
+  void _upsertActivityLog(Map<String, dynamic> record) {
+    if (!mounted) return;
+    final key = _activityLogKey(record);
+    final existingIndex =
+        _activityLogs.indexWhere((log) => _activityLogKey(log) == key);
+
+    setState(() {
+      if (existingIndex >= 0) {
+        _activityLogs[existingIndex] = Map<String, dynamic>.from(record);
+      } else {
+        _activityLogs.insert(0, Map<String, dynamic>.from(record));
+      }
+      _activityLogs.sort((a, b) {
+        final aTime = DateTime.tryParse(a['logged_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = DateTime.tryParse(b['logged_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+    });
+  }
+
+  Future<void> _loadActivityLogs({bool silent = false}) async {
     final sessionId = _bookingData['session_id']?.toString();
     if (sessionId == null || sessionId.isEmpty) {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _activityLogs.clear();
         });
@@ -826,21 +1605,37 @@ class _TrackingScreenState extends State<TrackingScreen> {
       return;
     }
 
-    final logs = await SupabaseService.getActivityLogs(sessionId);
-    if (!mounted) return;
-    setState(() {
-      _activityLogs
-        ..clear()
-        ..addAll(logs);
-    });
+    if (_isRefreshingActivityLogs) return;
+    _isRefreshingActivityLogs = true;
+
+    try {
+      final logs = await SupabaseService.getActivityLogs(sessionId);
+      if (!mounted) return;
+      setState(() {
+        _activityLogs
+          ..clear()
+          ..addAll(logs);
+      });
+    } finally {
+      _isRefreshingActivityLogs = false;
+    }
   }
 
   void _subscribeToActivityLogs() {
     final sessionId = _bookingData['session_id']?.toString();
     if (sessionId == null || sessionId.isEmpty) return;
+    if (_subscribedActivitySessionId == sessionId && _activityChannel != null) {
+      return;
+    }
 
+    if (_activityChannel != null) {
+      SupabaseService.client.removeChannel(_activityChannel!);
+      _activityChannel = null;
+    }
+
+    _subscribedActivitySessionId = sessionId;
     _activityChannel = SupabaseService.client
-        .channel('tracking_activity_$sessionId')
+        .channel('tracking_activity_live_$sessionId')
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
@@ -851,22 +1646,40 @@ class _TrackingScreenState extends State<TrackingScreen> {
             value: sessionId,
           ),
           callback: (payload) {
-            if (!mounted) return;
-            setState(() {
-              _activityLogs.insert(0, Map<String, dynamic>.from(payload.newRecord));
-            });
+            _upsertActivityLog(Map<String, dynamic>.from(payload.newRecord));
           },
         )
-        .subscribe();
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'activity_logs',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'session_id',
+            value: sessionId,
+          ),
+          callback: (payload) {
+            _upsertActivityLog(Map<String, dynamic>.from(payload.newRecord));
+          },
+        )
+        .subscribe((status, [error]) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            _loadActivityLogs(silent: true);
+          }
+        });
   }
 
   String _formatActivityTime(dynamic timeObj) {
     if (timeObj == null) return '--:--';
-    final parsed = timeObj is DateTime ? timeObj : DateTime.parse(timeObj.toString());
+    final parsed =
+        timeObj is DateTime ? timeObj : DateTime.parse(timeObj.toString());
     final local = parsed.toLocal();
-    final hour = local.hour.toString().padLeft(2, '0');
+    int hour = local.hour;
     final minute = local.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
+    final period = hour >= 12 ? 'PM' : 'AM';
+    if (hour > 12) hour -= 12;
+    if (hour == 0) hour = 12;
+    return '$hour:$minute $period';
   }
 
   int _getVisibleLogsCount() {
@@ -875,31 +1688,163 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   Widget _buildActivityLogsList() {
     if (_activityLogs.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0),
-        child: _logEntry('--:--', 'No activity logged yet', false, false, subtitle: 'Updates from the professional will appear here'),
-      );
-    }
-
-    final List<Widget> children = [];
-    for (int index = 0; index < _activityLogs.length; index++) {
-      final log = _activityLogs[index];
-      final message = (log['note']?.toString().trim().isNotEmpty ?? false)
-          ? log['note'].toString().trim()
-          : (log['activity_type']?.toString() ?? 'Activity update');
-      final activityType = log['activity_type']?.toString() ?? 'Activity';
-      children.add(
-        _logEntry(
-          _formatActivityTime(log['logged_at']),
-          message,
-          index == 0,
-          index == 0,
-          subtitle: activityType,
+      return _activityLogCard(
+        highlight: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'No activity logged yet',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
+                color: HestiaColors.textDark,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Updates from the professional will appear here.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+                height: 1.35,
+              ),
+            ),
+          ],
         ),
       );
     }
 
-    return Column(children: children);
+    final previewCount =
+        _activityLogs.length > 3 ? 3 : _activityLogs.length;
+    return Column(
+      children: List.generate(previewCount, (index) {
+        final log = _activityLogs[index];
+        final message =
+            (log['note']?.toString().trim().isNotEmpty ?? false)
+                ? log['note'].toString().trim()
+                : (log['activity_type']?.toString() ?? 'Activity update');
+        final activityType = log['activity_type']?.toString() ?? 'Activity';
+        final loggedAt = log['logged_at'];
+        final isLatest = index == 0;
+
+        return Padding(
+          padding: EdgeInsets.only(bottom: index == previewCount - 1 ? 0 : 12),
+          child: _activityLogCard(
+            highlight: isLatest,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: isLatest
+                        ? const Color(0xFFE8F5E9)
+                        : const Color(0xFFFAF2EB),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: isLatest
+                          ? const Color(0xFF2E7D32)
+                          : HestiaColors.primary,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              message,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: HestiaColors.textDark,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                          if (isLatest) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE8F5E9),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: const Text(
+                                'New',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF2E7D32),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$activityType · ${_formatActivityTime(loggedAt)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text(
+                  _formatActivityTime(loggedAt),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: HestiaColors.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _activityLogCard({
+    required Widget child,
+    required bool highlight,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: highlight
+              ? HestiaColors.primary
+              : HestiaColors.primary.withValues(alpha: 0.55),
+          width: highlight ? 1.6 : 1.3,
+        ),
+      ),
+      child: child,
+    );
   }
 
   @override
@@ -940,13 +1885,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
               final firstName = (_bookingData['caregiver_name']?.toString().trim().isNotEmpty == true
                       ? _bookingData['caregiver_name'].toString().trim().split(RegExp(r'\s+')).first
                       : 'Professional');
+              final runningLate = status != 'arrived' &&
+                  isProfessionalRunningLateForBooking(_bookingData);
               final label = status == 'arrived'
                   ? '$firstName has arrived'
-                  : '$firstName is on the way';
+                  : runningLate
+                      ? '$firstName is running late'
+                      : '$firstName is on the way';
               return Text(
                 label,
-                style: const TextStyle(
-                  color: HestiaColors.primary,
+                style: TextStyle(
+                  color: runningLate
+                      ? const Color(0xFFE65100)
+                      : HestiaColors.primary,
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
@@ -955,9 +1906,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
             return const Text(
               'Active Session',
               style: TextStyle(
-                color: Colors.white,
+                color: HestiaColors.primary,
                 fontSize: 18,
-                fontWeight: FontWeight.bold,
+                fontWeight: FontWeight.w800,
               ),
             );
           }(),
@@ -967,33 +1918,83 @@ class _TrackingScreenState extends State<TrackingScreen> {
               Padding(
                 padding: const EdgeInsets.only(right: 16.0),
                 child: GestureDetector(
-                  onTap: () {
-                    Navigator.of(context).push(
+                  onTap: () async {
+                    final sessionId =
+                        _bookingData['session_id']?.toString() ?? '';
+                    await Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) => ChatScreen(
-                          sessionId: _bookingData['session_id']?.toString() ?? '',
-                          caregiverName: _bookingData['caregiver_name'] ?? 'Professional',
-                          actualStart: _bookingData['actual_start'] as DateTime?,
-                          durationHours: (_bookingData['duration_hours'] as num?)?.toDouble(),
+                          sessionId: sessionId,
+                          caregiverName:
+                              _bookingData['caregiver_name'] ?? 'Professional',
+                          actualStart:
+                              _bookingData['actual_start'] as DateTime?,
+                          durationHours:
+                              (_bookingData['duration_hours'] as num?)
+                                  ?.toDouble(),
                         ),
                       ),
                     );
+                    if (!mounted) return;
+                    SupabaseService.markChatRead(sessionId);
+                    setState(() => _unreadChatCount = 0);
                   },
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: HestiaColors.primary.withValues(alpha: 0.15),
-                        width: 1,
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.chat_bubble_outline_rounded,
-                      color: HestiaColors.primary,
-                      size: 18,
+                  child: SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Positioned.fill(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color:
+                                    HestiaColors.primary.withValues(alpha: 0.15),
+                                width: 1,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.chat_bubble_outline_rounded,
+                              color: HestiaColors.primary,
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                        if (_unreadChatCount > 0)
+                          Positioned(
+                            top: -2,
+                            right: -2,
+                            child: Container(
+                              constraints: const BoxConstraints(minWidth: 18),
+                              height: 18,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 5),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFC0392B),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 1.5,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                _unreadChatCount > 9
+                                    ? '9+'
+                                    : '$_unreadChatCount',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  height: 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -1052,14 +2053,24 @@ class _TrackingScreenState extends State<TrackingScreen> {
     final isArrived = _bookingData['status']?.toString().toLowerCase() == 'arrived';
     final isClosed = ['completed', 'no_show', 'cancelled']
         .contains(_bookingData['status']?.toString().toLowerCase());
-    final etaText = _routeDurationMin > 0 ? '$_routeDurationMin min' : '23 min';
+    final isRunningLate =
+        !isArrived && isProfessionalRunningLateForBooking(_bookingData);
+    final etaText = _routeDurationMin > 0 ? '$_routeDurationMin min' : '--';
     final distanceText = _routeDistanceKm > 0
-        ? '${_routeDistanceKm.toStringAsFixed(1)} km'
-        : '2.4 km';
+        ? (_routeDistanceKm < 1
+            ? '${(_routeDistanceKm * 1000).round()} m'
+            : '${_routeDistanceKm.toStringAsFixed(1)} km')
+        : '--';
     final sessionText = _formatMetricTime().replaceAll('\n', ' ');
-    final caregiverFirstName = (_bookingData['caregiver_name']?.toString().trim().isNotEmpty == true
-            ? _bookingData['caregiver_name'].toString().trim().split(RegExp(r'\s+')).first
-            : 'Professional');
+    final sheetMessage = isArrived
+        ? 'Professional is at the booking address. Expand to verify arrival and see full details.'
+        : isRunningLate
+            ? professionalRunningLateMessage(
+                _bookingData['caregiver_name']?.toString(),
+              )
+            : _professionalLocation != null
+                ? 'Live route from professional to your booking address.'
+                : 'Waiting for professional live location to draw the route.';
 
     return Stack(
       key: const ValueKey('on_the_way'),
@@ -1075,29 +2086,42 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Center(
-                      child: Text(
-                        isArrived
-                            ? '$caregiverFirstName has arrived'
-                            : '$caregiverFirstName is on the way',
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w900,
-                          color: HestiaColors.primary,
+                    if (isRunningLate && !isArrived) ...[
+                      Center(
+                        child: Text(
+                          'Trying to reach your location quickly',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade700,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 14),
+                      const SizedBox(height: 14),
+                    ],
                     Row(
                       children: [
                         _mapChip(
                           icon: Icons.route_rounded,
-                          label: isArrived ? 'At your address' : '$distanceText away',
+                          label: isArrived
+                              ? 'At your address'
+                              : isRunningLate
+                                  ? 'Delayed'
+                                  : _routeDistanceKm > 0
+                                      ? '$distanceText away'
+                                      : 'Updating route',
                         ),
                         const SizedBox(width: 10),
                         _mapChip(
                           icon: Icons.schedule_rounded,
-                          label: isArrived ? 'Ready to verify' : 'ETA $etaText',
+                          label: isArrived
+                              ? 'Ready to verify'
+                              : isRunningLate
+                                  ? 'Past start time'
+                                  : _routeDurationMin > 0
+                                      ? 'ETA $etaText'
+                                      : 'ETA --',
                         ),
                       ],
                     ),
@@ -1208,13 +2232,16 @@ class _TrackingScreenState extends State<TrackingScreen> {
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
-                                  isArrived
-                                      ? 'Professional is at the booking address. Expand to verify arrival and see full details.'
-                                      : 'Route shown: ${_formatRouteSourceLabel()} to booking address.',
-                                  style: const TextStyle(
+                                  sheetMessage,
+                                  style: TextStyle(
                                     fontSize: 13,
-                                    color: HestiaColors.textMedium,
+                                    color: isRunningLate && !isArrived
+                                        ? const Color(0xFF8D4E00)
+                                        : HestiaColors.textMedium,
                                     height: 1.35,
+                                    fontWeight: isRunningLate && !isArrived
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
                                   ),
                                 ),
                                 AnimatedCrossFade(
@@ -1549,29 +2576,17 @@ class _TrackingScreenState extends State<TrackingScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Center(
-            child: Text(
-              'Active session',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-                color: Colors.white,
-                letterSpacing: 0.2,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Time details panel (brown card)
+          // Time details panel
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: const Color(0xFF5A3E25),
+              color: HestiaColors.primary,
               borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
-                  color: HestiaColors.primary.withValues(alpha: 0.3),
-                  blurRadius: 10,
+                  color: HestiaColors.primary.withValues(alpha: 0.28),
+                  blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
               ],
@@ -1584,19 +2599,19 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
+                        Text(
                           'SESSION TIME',
                           style: TextStyle(
                             fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFFDCD2C9),
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white.withValues(alpha: 0.85),
                             letterSpacing: 0.8,
                           ),
                         ),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                           decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.12),
+                            color: Colors.white.withValues(alpha: 0.16),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Row(
@@ -1637,9 +2652,9 @@ class _TrackingScreenState extends State<TrackingScreen> {
                     const SizedBox(height: 12),
                     Text(
                       _formatEndsAtText(),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
-                        color: Color(0xFFDCD2C9),
+                        color: Colors.white.withValues(alpha: 0.85),
                       ),
                     ),
                   ],
@@ -1650,16 +2665,18 @@ class _TrackingScreenState extends State<TrackingScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      const Text(
+                      Text(
                         'Professional',
                         style: TextStyle(
                           fontSize: 9,
-                          color: Color(0xFFDCD2C9),
+                          color: Colors.white.withValues(alpha: 0.8),
                         ),
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        (_bookingData['caregiver_name'] ?? 'Professional').toString().replaceFirst(' ', '\n'),
+                        (_bookingData['caregiver_name'] ?? 'Professional')
+                            .toString()
+                            .replaceFirst(' ', '\n'),
                         textAlign: TextAlign.end,
                         style: const TextStyle(
                           fontSize: 14,
@@ -1677,14 +2694,17 @@ class _TrackingScreenState extends State<TrackingScreen> {
           const SizedBox(height: 24),
           // Activity log header
           GestureDetector(
-             onTap: () {
-              Navigator.of(context).push(
+            onTap: () async {
+              await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => ActivityLogScreen(
                     bookingData: _bookingData,
                   ),
                 ),
               );
+              if (mounted) {
+                _loadActivityLogs(silent: true);
+              }
             },
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1734,21 +2754,27 @@ class _TrackingScreenState extends State<TrackingScreen> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: HestiaColors.primary,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: HestiaColors.primary.withValues(alpha: 0.15),
-                width: 1.2,
-              ),
+              boxShadow: [
+                BoxShadow(
+                  color: HestiaColors.primary.withValues(alpha: 0.28),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
             child: Row(
               children: [
                 Container(
                   width: 46,
                   height: 46,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF8C6239),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
                     shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.35),
+                    ),
                   ),
                   alignment: Alignment.center,
                   child: Text(
@@ -1770,23 +2796,23 @@ class _TrackingScreenState extends State<TrackingScreen> {
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
-                          color: HestiaColors.textDark,
+                          color: Colors.white,
                         ),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         '${_bookingData['title'] ?? 'Care'} Specialist · Verified',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
-                          color: HestiaColors.textMedium,
+                          color: Colors.white.withValues(alpha: 0.82),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const Icon(
+                Icon(
                   Icons.verified_user_rounded,
-                  color: Colors.green,
+                  color: Colors.white.withValues(alpha: 0.95),
                   size: 20,
                 ),
               ],
@@ -1799,7 +2825,7 @@ class _TrackingScreenState extends State<TrackingScreen> {
             height: 56,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFC0392B),
+                backgroundColor: HestiaColors.primary,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(28),
@@ -1822,7 +2848,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
   }
 
   void _showEndSessionWarningDialog() {
-    final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
 
     showDialog(
@@ -1888,68 +2913,103 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () async {
-                      if (_isEndingSession) return;
+                      if (_isEndingSession || _hasNavigatedToReview) return;
                       Navigator.of(dialogContext).pop(); // close warning dialog
-                      
-                      final sessionId = _bookingData['session_id'];
-                      if (sessionId != null) {
-                        if (mounted) {
-                          setState(() {
-                            _isEndingSession = true;
-                          });
+
+                      var sessionId = _bookingData['session_id']?.toString();
+                      final bookingId = _bookingData['booking_id']?.toString();
+
+                      if ((sessionId == null || sessionId.isEmpty) &&
+                          bookingId != null &&
+                          bookingId.isNotEmpty) {
+                        final refreshed =
+                            await SupabaseService.getBookingStatus(bookingId);
+                        sessionId = refreshed?['session_id']?.toString();
+                        if (refreshed != null && mounted) {
+                          setState(() => _bookingData = refreshed);
                         }
-                        bool loadingShown = false;
-                        final rootNavigator = Navigator.of(context, rootNavigator: true);
-                        // Show loading indicator
-                        showDialog(
-                          context: context,
-                          useRootNavigator: true,
-                          barrierDismissible: false,
-                          builder: (_) => const Center(
-                            child: CircularProgressIndicator(color: HestiaColors.primary),
+                      }
+
+                      if (sessionId == null || sessionId.isEmpty) {
+                        messenger.showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Unable to end session: missing session id.',
+                            ),
                           ),
                         );
-                        loadingShown = true;
+                        return;
+                      }
 
-                        try {
-                          await SupabaseService.endSessionByClient(
-                            sessionId: sessionId.toString(),
-                          ).timeout(const Duration(seconds: 20));
-                          
-                          // Refresh status to get actual_end etc.
-                          final updated = await SupabaseService.getBookingStatus(
-                            _bookingData['booking_id'].toString(),
-                          ).timeout(const Duration(seconds: 10), onTimeout: () => null);
+                      if (!mounted) return;
 
-                          if (mounted) {
-                            if (loadingShown && rootNavigator.canPop()) {
-                              rootNavigator.pop(); // dismiss loading indicator
-                            }
-                            
-                            // Navigate to SessionCompleteScreen
-                            navigator.pushReplacement(
-                              MaterialPageRoute(
-                                builder: (context) => SessionCompleteScreen(
-                                  bookingData: updated ?? _bookingData,
-                                ),
-                              ),
-                            );
-                          }
-                        } catch (e) {
-                          if (mounted) {
-                            if (loadingShown && rootNavigator.canPop()) {
-                              rootNavigator.pop(); // dismiss loading indicator
-                            }
-                            messenger.showSnackBar(
-                              SnackBar(content: Text('Failed to end session: $e')),
-                            );
-                          }
-                        } finally {
-                          if (mounted) {
-                            setState(() {
-                              _isEndingSession = false;
-                            });
-                          }
+                      // Block realtime/polling from racing while End Session owns nav.
+                      _isEndingSession = true;
+                      _tearDownLiveSessionListeners();
+
+                      BuildContext? loadingDialogContext;
+                      var loadingOpen = true;
+                      showDialog<void>(
+                        context: context,
+                        useRootNavigator: true,
+                        barrierDismissible: false,
+                        builder: (ctx) {
+                          loadingDialogContext = ctx;
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: HestiaColors.primary,
+                            ),
+                          );
+                        },
+                      );
+
+                      void dismissLoading() {
+                        if (!loadingOpen) return;
+                        loadingOpen = false;
+                        final dialogCtx = loadingDialogContext;
+                        // Only pop the loading dialog — never the review route.
+                        if (dialogCtx != null && dialogCtx.mounted) {
+                          Navigator.of(dialogCtx).pop();
+                        }
+                      }
+
+                      try {
+                        await SupabaseService.endSessionByClient(
+                          sessionId: sessionId,
+                        ).timeout(const Duration(seconds: 20));
+
+                        final updated = bookingId != null
+                            ? await SupabaseService.getBookingStatus(bookingId)
+                                .timeout(
+                                  const Duration(seconds: 10),
+                                  onTimeout: () => null,
+                                )
+                            : null;
+
+                        dismissLoading();
+                        if (!mounted) return;
+
+                        _goToReviewScreen(
+                          data: updated ?? _bookingData,
+                          force: true,
+                        );
+                      } catch (e) {
+                        // Allow retry if ending failed.
+                        _isEndingSession = false;
+                        if (mounted) {
+                          dismissLoading();
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text('Failed to end session: $e'),
+                            ),
+                          );
+                          // Resume live listeners after a failed end attempt.
+                          _startStopwatch();
+                          _startStatusPolling();
+                          _initRealtimeSubscription();
+                          _subscribeToActivityLogs();
+                          _startLocationTracking();
+                          _subscribeToChatUnread();
                         }
                       }
                     },
@@ -1979,19 +3039,94 @@ class _TrackingScreenState extends State<TrackingScreen> {
 
   void _startLocationTracking() {
     _locationTimer?.cancel();
-    _locationTimer = Timer.periodic(const Duration(seconds: 15), (timer) async {
-      final sessionId = _bookingData['session_id'];
-      if (sessionId != null && mounted) {
-        final latestLoc = await SupabaseService.getLatestProfessionalLocation(sessionId.toString());
-        if (latestLoc != null && mounted) {
-          setState(() {
-            _professionalLocation = LatLng(latestLoc['latitude']!, latestLoc['longitude']!);
-          });
-          // Refresh route and coordinates starting from professional's current location
-          await _loadRouteAndCoordinates();
-        }
+    if (_locationChannel != null) {
+      SupabaseService.client.removeChannel(_locationChannel!);
+      _locationChannel = null;
+      _subscribedLocationSessionId = null;
+    }
+
+    Future<void> pollLiveLocationAndRoute() async {
+      final moved = await _refreshProfessionalLocation();
+      if (!mounted) return;
+      if (_professionalLocation != null) {
+        _recomputeLiveMetrics(_professionalLocation!, forceUi: true);
       }
+      if (moved ||
+          (_shouldRouteFromProfessionalLiveLocation() &&
+              _professionalLocation != null &&
+              _routePoints.isEmpty)) {
+        _scheduleLiveRouteRedraw(immediate: _routePoints.isEmpty || moved);
+      }
+    }
+
+    // Fast poll so consumer stays close to staff GPS syncs even if realtime lags.
+    unawaited(pollLiveLocationAndRoute());
+    _locationTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      unawaited(pollLiveLocationAndRoute());
     });
+
+    final sessionId = _bookingData['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) return;
+    _subscribedLocationSessionId = sessionId;
+
+    void handleLocationPayload(Map<String, dynamic> record) {
+      final parsed = SupabaseService.parseProfessionalCoordinatesPublic(
+        record['coordinates'],
+      );
+      if (parsed != null) {
+        final next = LatLng(parsed['latitude']!, parsed['longitude']!);
+        final moved = _applyProfessionalLocation(next);
+        if (moved) {
+          _scheduleLiveRouteRedraw(immediate: true);
+        }
+        return;
+      }
+      // Geography payload couldn't be parsed — fall back to RPC lat/lng.
+      unawaited(() async {
+        final moved = await _refreshProfessionalLocation();
+        if (moved) {
+          _scheduleLiveRouteRedraw(immediate: true);
+        }
+      }());
+    }
+
+    _locationChannel = SupabaseService.client
+        .channel('pro_locations_live_$sessionId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.insert,
+          schema: 'public',
+          table: 'professional_locations',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'session_id',
+            value: sessionId,
+          ),
+          callback: (payload) {
+            handleLocationPayload(
+              Map<String, dynamic>.from(payload.newRecord),
+            );
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'professional_locations',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'session_id',
+            value: sessionId,
+          ),
+          callback: (payload) {
+            handleLocationPayload(
+              Map<String, dynamic>.from(payload.newRecord),
+            );
+          },
+        )
+        .subscribe((status, [error]) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            unawaited(pollLiveLocationAndRoute());
+          }
+        });
   }
 
   void _initRealtimeSubscription() {
@@ -2010,10 +3145,11 @@ class _TrackingScreenState extends State<TrackingScreen> {
             value: bookingId.toString(),
           ),
           callback: (payload) {
+            if (_hasNavigatedToReview || _isEndingSession || !mounted) return;
             final newStatus = payload.newRecord['status']?.toString();
             final arrivalCode = payload.newRecord['arrival_code']?.toString();
             final startTime = payload.newRecord['start_time']?.toString();
-            if (newStatus != null && mounted) {
+            if (newStatus != null) {
               final previousRouteMode = _shouldRouteFromProfessionalLiveLocation();
               setState(() {
                 _bookingData['status'] = newStatus;
@@ -2023,17 +3159,20 @@ class _TrackingScreenState extends State<TrackingScreen> {
                 if (startTime != null) {
                   _bookingData['actual_start'] = DateTime.parse(startTime);
                 }
-                final isSessionActive = (newStatus == 'started' || newStatus == 'active' || newStatus == 'in_progress');
-                if (isSessionActive) {
-                  _isOnTheWayView = false;
+                _applyStatusToView(newStatus);
+                if (_isActiveSessionStatus(newStatus)) {
                   _startStopwatch();
-                  _statusTimer?.cancel();
-                } else {
-                  _isOnTheWayView = true;
                 }
               });
+              if (_isCompletedStatus(newStatus)) {
+                _goToReviewScreen(
+                  data: Map<String, dynamic>.from(_bookingData),
+                );
+                return;
+              }
               if (previousRouteMode !=
                   _shouldRouteFromProfessionalLiveLocation()) {
+                _startLocationTracking();
                 _loadRouteAndCoordinates();
               }
             }
@@ -2356,86 +3495,6 @@ class _TrackingScreenState extends State<TrackingScreen> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _logEntry(String time, String message, bool isGreen, bool showNewBadge, {String subtitle = ''}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            time,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: HestiaColors.textMedium,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Container(
-            margin: const EdgeInsets.only(top: 4),
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              color: isGreen ? const Color(0xFF2ECC71) : const Color(0xFFF39C12),
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        message,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: HestiaColors.textDark,
-                          height: 1.35,
-                        ),
-                      ),
-                    ),
-                    if (showNewBadge) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'New',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                if (subtitle.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: HestiaColors.textLight,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

@@ -4,7 +4,9 @@ import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../config/razorpay_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
-import 'choose_professional_screen.dart';
+import '../services/booking_flow_service.dart';
+import '../utils/active_booking_navigation.dart';
+import 'booking_scheduled_screen.dart';
 import 'repeat_booking_screen.dart';
 import 'search_location_screen.dart';
 import 'service_detail_screen.dart';
@@ -44,6 +46,16 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   String _userEmail = '';
   bool _isLoadingAddress = false;
 
+  String _repeatOption = 'Once';
+  String _endsAfter = '1 session';
+  bool _preferSameProfessional = false;
+  bool _donateToNgo = false;
+  int _donationAmount = 0;
+  int? _selectedDonationPreset;
+  final TextEditingController _donationController = TextEditingController();
+
+  static const List<int> _donationPresets = [25, 50, 100];
+
   late Razorpay _razorpay;
 
   @override
@@ -65,13 +77,67 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   @override
   void dispose() {
+    _donationController.dispose();
     _razorpay.clear();
     super.dispose();
   }
 
+  int _getDonationAmount() {
+    if (!_donateToNgo) return 0;
+    final parsed = int.tryParse(_donationController.text.trim());
+    if (parsed != null && parsed > 0) return parsed;
+    return _donationAmount > 0 ? _donationAmount : 0;
+  }
+
+  void _setDonationAmount(int amount) {
+    setState(() {
+      _donationAmount = amount;
+      _selectedDonationPreset =
+          _donationPresets.contains(amount) ? amount : null;
+      _donationController.text = amount > 0 ? amount.toString() : '';
+    });
+  }
+
+  bool _validateDonationBeforePay() {
+    if (!_donateToNgo) return true;
+    if (_getDonationAmount() > 0) return true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Enter a donation amount or uncheck NGO donation'),
+        backgroundColor: Colors.redAccent,
+      ),
+    );
+    return false;
+  }
+
+  double _calculateFinalPay(double itemTotal, double gstFees) {
+    return itemTotal + gstFees + _getDonationAmount();
+  }
+
+  bool get _isInstantTab => _activeTab == 'Instant';
+
+  /// Instant bookings start ASAP — no slot picker.
+  void _applyInstantScheduleNow() {
+    final now = DateTime.now();
+    _scheduledDate = DateTime(now.year, now.month, now.day);
+    _scheduledTimeSlot = formatBookingTimeLabel(now);
+    _repeatOption = 'Once';
+  }
+
   void _proceedToPay() {
+    if (!_validateDonationBeforePay()) return;
+
+    if (_isInstantTab) {
+      _applyInstantScheduleNow();
+    } else if (_scheduledDate == null || _scheduledTimeSlot == null) {
+      _openTimeSlotBottomSheet(context);
+      return;
+    }
+
     final itemTotal = _getItemTotal();
-    final finalPay = (itemTotal + itemTotal * 0.18).toInt();
+    final gstFees = itemTotal * 0.18;
+    final donation = _getDonationAmount();
+    final finalPay = _calculateFinalPay(itemTotal, gstFees).toInt();
     final serviceNames = _servicesMap.keys.join(', ');
     final authEmail = SupabaseService.currentUserEmail;
 
@@ -79,7 +145,11 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       'key': RazorpayConfig.keyId,
       'amount': finalPay * 100,
       'name': 'Hestia',
-      'description': 'Payment for $serviceNames Care Session',
+      'description': donation > 0
+          ? 'Payment for $serviceNames + NGO donation'
+          : _isInstantTab
+              ? 'Instant booking for $serviceNames'
+              : 'Payment for $serviceNames Care Session',
       'timeout': 300,
       'prefill': {
         'name': _userName.isNotEmpty ? _userName : 'Guest User',
@@ -105,32 +175,118 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     }
   }
 
-  void _handlePaymentSuccess(PaymentSuccessResponse response) {
+  Future<void> _openRepeatBooking() async {
+    final firstService =
+        _servicesMap.keys.isNotEmpty ? _servicesMap.keys.first : widget.serviceTitle;
+    final matchedTitle = _getDetail(firstService)?.title ?? widget.serviceTitle;
+
+    final result = await Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (context) => RepeatBookingScreen(
+          serviceTitle: matchedTitle,
+          selectedDate: _scheduledDate ?? DateTime.now(),
+          selectedTime: _scheduledTimeSlot,
+          selectedDuration: _getSelectedDurationLabel(),
+        ),
+      ),
+    );
+
+    if (!mounted || result == null) return;
+
+    setState(() {
+      _scheduledDate = result['date'] as DateTime? ?? _scheduledDate;
+      _scheduledTimeSlot = result['time'] as String? ?? _scheduledTimeSlot;
+      _repeatOption = result['frequency'] as String? ?? 'Everyday';
+      _endsAfter = result['endsAfter'] as String? ?? _endsAfter;
+      _preferSameProfessional = true;
+      _activeTab = 'Scheduled';
+    });
+
+    if (_scheduledDate != null && _scheduledTimeSlot != null) {
+      _proceedToPay();
+    }
+  }
+
+  Future<void> _handlePaymentSuccess(PaymentSuccessResponse response) async {
     if (!mounted) return;
+
+    final wasInstant = _isInstantTab;
+    if (wasInstant) {
+      _applyInstantScheduleNow();
+    }
     if (_scheduledDate == null || _scheduledTimeSlot == null) return;
 
     final firstService =
         _servicesMap.keys.isNotEmpty ? _servicesMap.keys.first : widget.serviceTitle;
     final matchedTitle = _getDetail(firstService)?.title ?? widget.serviceTitle;
     final itemTotal = _getItemTotal();
-    final finalPay = (itemTotal + itemTotal * 0.18).toInt();
+    final gstFees = itemTotal * 0.18;
+    final donation = _getDonationAmount();
+    final finalPay = _calculateFinalPay(itemTotal, gstFees).toInt();
 
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => ChooseProfessionalScreen(
-          serviceTitle: matchedTitle,
-          selectedDate: _scheduledDate!,
-          selectedTime: _scheduledTimeSlot!,
-          selectedDuration: _getSelectedDurationLabel(),
-          repeatOption: 'Once',
-          endsAfter: '1 session',
-          preferSameProfessional: false,
-          servicesMap: _servicesMap,
-          paymentId: response.paymentId,
-          paidAmount: finalPay,
-        ),
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: HestiaColors.primary),
       ),
     );
+
+    try {
+      final details = await BookingFlowService.confirmAfterPayment(
+        serviceTitle: matchedTitle,
+        selectedDate: _scheduledDate!,
+        selectedTime: _scheduledTimeSlot!,
+        selectedDuration: _getSelectedDurationLabel(),
+        repeatOption: wasInstant ? 'Once' : _repeatOption,
+        endsAfter: wasInstant ? '1 session' : _endsAfter,
+        preferSameProfessional: _preferSameProfessional,
+        totalAmount: finalPay,
+        paymentId: response.paymentId,
+        servicesMap: _servicesMap,
+        donationAmount: donation,
+        serviceSubtotal: itemTotal.round(),
+        gstAmount: gstFees,
+        assignProfessionalNow: wasInstant,
+      );
+
+      if (!mounted) return;
+      Navigator.pop(context); // loading
+      HapticFeedback.vibrate();
+
+      final detail = _getDetail(firstService);
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => BookingScheduledScreen(
+            bookingId: details.bookingId,
+            userName: details.userName,
+            address: details.addressLine,
+            serviceTitle: details.serviceTitle,
+            durationLabel: details.durationLabel,
+            amountPaid: details.amountPaid,
+            scheduledDate: details.scheduledDate,
+            scheduledTime: details.scheduledTime,
+            serviceImageAsset: detail?.detailImageAsset ?? detail?.iconAsset,
+            serviceCount: details.serviceCount,
+            caregiverName: details.professionalName,
+            isAwaitingDeparture: details.assignedImmediately,
+            donationAmount: details.donationAmount,
+            serviceSubtotal: details.serviceSubtotal,
+            gstAmount: details.gstAmount,
+          ),
+        ),
+        (route) => false,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to confirm booking: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   void _handlePaymentError(PaymentFailureResponse response) {
@@ -309,7 +465,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     
     // GST (18% & Service Fees)
     final gstFees = itemTotal * 0.18;
-    final finalPay = itemTotal + gstFees;
+    final donation = _getDonationAmount();
+    final finalPay = _calculateFinalPay(itemTotal, gstFees);
 
     final hasItems = _servicesMap.isNotEmpty;
 
@@ -413,19 +570,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                       if (_activeTab == 'Recurring') ...[
                         const SizedBox(height: 16),
                         GestureDetector(
-                          onTap: () {
-                            final firstService = _servicesMap.keys.isNotEmpty ? _servicesMap.keys.first : widget.serviceTitle;
-                            final matchedTitle = _getDetail(firstService)?.title ?? widget.serviceTitle;
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => RepeatBookingScreen(
-                                  serviceTitle: matchedTitle,
-                                  selectedDate: DateTime.now(),
-                                  selectedDuration: _getSelectedDurationLabel(),
-                                ),
-                              ),
-                            );
-                          },
+                          onTap: _openRepeatBooking,
                           child: Container(
                             padding: const EdgeInsets.all(20.0),
                             decoration: BoxDecoration(
@@ -863,6 +1008,47 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                         ),
                         child: Column(
                           children: [
+                            if (_isInstantTab) ...[
+                              Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.bolt_rounded,
+                                      color: Colors.grey.shade500,
+                                      size: 22,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Starts as soon as possible',
+                                            style: TextStyle(
+                                              fontSize: 14.5,
+                                              fontWeight: FontWeight.bold,
+                                              color: HestiaColors.textDark,
+                                            ),
+                                          ),
+                                          SizedBox(height: 4),
+                                          Text(
+                                            'No time slot needed. We\'ll assign a nearby professional right after payment.',
+                                            style: TextStyle(
+                                              fontSize: 12.5,
+                                              color: HestiaColors.textMedium,
+                                              height: 1.35,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Divider(height: 1, color: Colors.grey.withValues(alpha: 0.15)),
+                            ],
                             if (_activeTab == 'Scheduled' && _scheduledDate != null && _scheduledTimeSlot != null) ...[
                               Padding(
                                 padding: const EdgeInsets.all(16.0),
@@ -1019,6 +1205,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
                       const SizedBox(height: 24),
 
+                      _buildDonationSection(),
+
+                      const SizedBox(height: 24),
+
                       // Bill Details Heading
                       const Text(
                         'Bill details',
@@ -1111,6 +1301,23 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                               ),
                               const SizedBox(height: 8),
 
+                              if (donation > 0) ...[
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      'NGO donation',
+                                      style: TextStyle(fontSize: 13, color: HestiaColors.textMedium),
+                                    ),
+                                    Text(
+                                      '₹$donation',
+                                      style: const TextStyle(fontSize: 13, color: HestiaColors.textDark),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                              ],
+
                               // GST & Service Fees
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1190,21 +1397,15 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                             return;
                           }
                           if (_activeTab == 'Recurring') {
-                            final firstService = _servicesMap.keys.isNotEmpty ? _servicesMap.keys.first : widget.serviceTitle;
-                            final matchedTitle = _getDetail(firstService)?.title ?? widget.serviceTitle;
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => RepeatBookingScreen(
-                                  serviceTitle: matchedTitle,
-                                  selectedDate: DateTime.now(),
-                                  selectedDuration: _getSelectedDurationLabel(),
-                                ),
-                              ),
-                            );
+                            _openRepeatBooking();
+                          } else if (_isInstantTab) {
+                            if (_validateDonationBeforePay()) {
+                              _proceedToPay();
+                            }
                           } else {
                             if (_scheduledDate == null || _scheduledTimeSlot == null) {
                               _openTimeSlotBottomSheet(context);
-                            } else {
+                            } else if (_validateDonationBeforePay()) {
                               _proceedToPay();
                             }
                           }
@@ -1213,8 +1414,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                           child: Text(
                             _activeTab == 'Recurring'
                                 ? 'Select frequency & time slot'
-                                : _activeTab == 'Instant'
-                                    ? 'Proceed to payment'
+                                : _isInstantTab
+                                    ? 'Book instantly'
                                 : (_scheduledDate == null || _scheduledTimeSlot == null
                                     ? 'Select time slot'
                                     : 'Proceed to pay'),
@@ -1237,6 +1438,176 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   );
   }
 
+  Widget _buildDonationSection() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _donateToNgo
+              ? HestiaColors.primary.withValues(alpha: 0.35)
+              : Colors.grey.withValues(alpha: 0.12),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () {
+              setState(() {
+                _donateToNgo = !_donateToNgo;
+                if (!_donateToNgo) {
+                  _donationAmount = 0;
+                  _selectedDonationPreset = null;
+                  _donationController.clear();
+                } else if (_donationAmount == 0) {
+                  _setDonationAmount(_donationPresets.first);
+                }
+              });
+            },
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: Checkbox(
+                    value: _donateToNgo,
+                    activeColor: HestiaColors.primary,
+                    side: BorderSide(color: Colors.grey.shade400),
+                    onChanged: (checked) {
+                      setState(() {
+                        _donateToNgo = checked ?? false;
+                        if (!_donateToNgo) {
+                          _donationAmount = 0;
+                          _selectedDonationPreset = null;
+                          _donationController.clear();
+                        } else if (_donationAmount == 0) {
+                          _setDonationAmount(_donationPresets.first);
+                        }
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Icon(
+                  Icons.volunteer_activism_outlined,
+                  color: HestiaColors.primary,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Donate to NGO',
+                    style: TextStyle(
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w800,
+                      color: HestiaColors.textDark,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_donateToNgo) ...[
+            const SizedBox(height: 6),
+            Text(
+              '100% of your contribution goes to Hestia Care Foundation.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.35,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _donationController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                hintText: 'Enter amount',
+                prefixText: '₹ ',
+                prefixStyle: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: HestiaColors.textDark,
+                ),
+                filled: true,
+                fillColor: const Color(0xFFFAF7F4),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey.shade300),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                    color: HestiaColors.primary,
+                    width: 1.4,
+                  ),
+                ),
+              ),
+              onChanged: (value) {
+                final amount = int.tryParse(value.trim()) ?? 0;
+                setState(() {
+                  _donationAmount = amount;
+                  _selectedDonationPreset =
+                      _donationPresets.contains(amount) ? amount : null;
+                });
+              },
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: _donationPresets.map((preset) {
+                final isSelected = _selectedDonationPreset == preset;
+                return Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.only(
+                      right: preset == _donationPresets.last ? 0 : 8,
+                    ),
+                    child: OutlinedButton(
+                      onPressed: () => _setDonationAmount(preset),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: isSelected
+                            ? Colors.white
+                            : HestiaColors.primary,
+                        backgroundColor:
+                            isSelected ? HestiaColors.primary : Colors.white,
+                        side: BorderSide(
+                          color: HestiaColors.primary.withValues(alpha: 0.5),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        '₹$preset',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildTabItem(String title) {
     final isSelected = title == _activeTab;
     return Expanded(
@@ -1244,6 +1615,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         onTap: () {
           setState(() {
             _activeTab = title;
+            if (title == 'Instant') {
+              _applyInstantScheduleNow();
+            }
           });
         },
         child: Container(

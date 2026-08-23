@@ -11,6 +11,11 @@ class ReceiptScreen extends StatelessWidget {
     final title = sessionData['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
     final totalAmount = sessionData['amount'] ?? 1497;
+    final donationAmount = (sessionData['donation_amount'] as num?)?.toInt() ?? 0;
+    final serviceSubtotal = (sessionData['service_subtotal'] as num?)?.toInt() ?? 0;
+    final gstAmount = (sessionData['gst_amount'] as num?)?.toDouble() ?? 0;
+    final tipAmount = (sessionData['tip_amount'] as num?)?.toInt() ?? 0;
+    final grandTotal = totalAmount + tipAmount;
     
     // Parse date/time strings
     final start = sessionData['scheduled_start'] as DateTime;
@@ -110,7 +115,7 @@ class ReceiptScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '₹${totalAmount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},')}',
+                  '₹${grandTotal.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},')}',
                   style: const TextStyle(
                     fontSize: 36,
                     fontWeight: FontWeight.w900,
@@ -196,6 +201,25 @@ class ReceiptScreen extends StatelessWidget {
                             _buildReceiptRow('Duration', durationStr),
                             const Divider(color: Color(0xFFFAF2EB), height: 28, thickness: 1),
                             _buildReceiptRow('Rate', '₹${getServiceRate(title)} / hr'),
+                            if (donationAmount > 0) ...[
+                              const Divider(color: Color(0xFFFAF2EB), height: 28, thickness: 1),
+                              _buildReceiptRow(
+                                'Service + GST',
+                                '₹${serviceSubtotal + gstAmount.round()}',
+                              ),
+                              const Divider(color: Color(0xFFFAF2EB), height: 28, thickness: 1),
+                              _buildReceiptRow(
+                                'NGO donation',
+                                '₹$donationAmount',
+                              ),
+                            ],
+                            if (tipAmount > 0) ...[
+                              const Divider(color: Color(0xFFFAF2EB), height: 28, thickness: 1),
+                              _buildReceiptRow(
+                                'Caregiver tip',
+                                '₹$tipAmount',
+                              ),
+                            ],
                             const Divider(color: Color(0xFFFAF2EB), height: 28, thickness: 1),
                             _buildReceiptRow('Member', 'Aryan (Newborn)'),
                             const Divider(color: Color(0xFFFAF2EB), height: 28, thickness: 1),

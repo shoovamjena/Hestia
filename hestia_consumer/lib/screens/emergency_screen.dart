@@ -1,6 +1,10 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../services/supabase_service.dart';
 import '../theme/colors.dart';
+import 'rate_session_screen.dart';
 
 class EmergencyScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -10,10 +14,12 @@ class EmergencyScreen extends StatefulWidget {
   State<EmergencyScreen> createState() => _EmergencyScreenState();
 }
 
-class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProviderStateMixin {
+class _EmergencyScreenState extends State<EmergencyScreen>
+    with SingleTickerProviderStateMixin {
   int _secondsLeft = 5;
   Timer? _timer;
   bool _callInitiated = false;
+  bool _isEndingSession = false;
   late AnimationController _pulseController;
 
   @override
@@ -46,7 +52,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
           _secondsLeft = 0;
           _callInitiated = true;
         });
-        _triggerCall("Hub Dispatch");
+        unawaited(_callDispatchAndEndSession());
       }
     });
   }
@@ -69,6 +75,89 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
         backgroundColor: const Color(0xFFC0392B),
       ),
     );
+  }
+
+  String get _hubName {
+    final raw = widget.bookingData['hub_name']?.toString().trim() ?? '';
+    return raw.isEmpty ? 'Assigned Hub' : raw;
+  }
+
+  String get _hubAddress {
+    final raw = widget.bookingData['hub_address']?.toString().trim() ?? '';
+    return raw.isEmpty ? 'Hub address unavailable' : raw;
+  }
+
+  String get _dispatchLabel => '$_hubName Dispatch';
+
+  Future<String?> _resolveSessionId() async {
+    final existing = widget.bookingData['session_id']?.toString();
+    if (existing != null && existing.isNotEmpty) return existing;
+
+    final bookingId = widget.bookingData['booking_id']?.toString();
+    if (bookingId == null || bookingId.isEmpty) return null;
+
+    final refreshed = await SupabaseService.getBookingStatus(bookingId);
+    return refreshed?['session_id']?.toString();
+  }
+
+  Future<void> _callDispatchAndEndSession() async {
+    if (_isEndingSession) return;
+    _timer?.cancel();
+
+    final messenger = ScaffoldMessenger.of(context);
+    if (mounted) {
+      setState(() {
+        _callInitiated = true;
+        _isEndingSession = true;
+      });
+    }
+
+    _triggerCall(_dispatchLabel);
+
+    try {
+      final sessionId = await _resolveSessionId();
+      if (sessionId == null || sessionId.isEmpty) {
+        throw Exception('Missing session id for emergency dispatch.');
+      }
+
+      await SupabaseService.endSessionByClient(sessionId: sessionId);
+
+      final bookingId = widget.bookingData['booking_id']?.toString();
+      final refreshed = bookingId != null && bookingId.isNotEmpty
+          ? await SupabaseService.getBookingStatus(bookingId)
+          : null;
+      final sessionData = Map<String, dynamic>.from(
+        refreshed ?? widget.bookingData,
+      );
+      sessionData['status'] = 'completed';
+      sessionData['session_id'] = sessionId;
+      sessionData['caregiver_name'] =
+          sessionData['caregiver_name'] ?? 'Professional';
+      sessionData['title'] =
+          sessionData['title'] ?? sessionData['service_type'] ?? 'Care';
+
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => RateSessionScreen(sessionData: sessionData),
+        ),
+        (route) => route.isFirst,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _callInitiated = false;
+        _isEndingSession = false;
+        _secondsLeft = 5;
+      });
+      _startCountdown();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Emergency dispatch failed: $e'),
+          backgroundColor: const Color(0xFFC0392B),
+        ),
+      );
+    }
   }
 
   @override
@@ -152,7 +241,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
 
               Text(
                 _callInitiated
-                    ? 'Connecting to Dispatcher...'
+                    ? 'Connecting to $_dispatchLabel...'
                     : 'Emergency Escalation',
                 style: const TextStyle(
                   color: Colors.white,
@@ -163,8 +252,8 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
               const SizedBox(height: 12),
               Text(
                 _callInitiated
-                    ? 'Please stay on the line.'
-                    : 'Calling Hestia Hub Dispatch automatically in $_secondsLeft seconds...',
+                    ? 'Ending the session and notifying the professional hub now.'
+                    : 'Calling $_dispatchLabel automatically in $_secondsLeft seconds...',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white70,
@@ -204,7 +293,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
                     const Divider(color: Colors.white10, height: 20),
                     _buildReferenceRow('Service Type', service),
                     const Divider(color: Colors.white10, height: 20),
-                    _buildReferenceRow('Location', 'Koramangala, South BLR'),
+                    _buildReferenceRow('Hub', _hubName),
+                    const Divider(color: Colors.white10, height: 20),
+                    _buildReferenceRow('Hub Address', _hubAddress),
                   ],
                 ),
               ),
@@ -225,15 +316,9 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
                       ),
                       elevation: 0,
                     ),
-                    onPressed: () {
-                      _timer?.cancel();
-                      setState(() {
-                        _callInitiated = true;
-                      });
-                      _triggerCall("Hub Dispatch");
-                    },
-                    child: const Text(
-                      'Call Hub Dispatch Now',
+                    onPressed: _callDispatchAndEndSession,
+                    child: Text(
+                      'Call $_dispatchLabel Now',
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
@@ -275,7 +360,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> with SingleTickerProv
               const SizedBox(height: 12),
 
               TextButton(
-                onPressed: _cancelCountdown,
+                onPressed: _isEndingSession ? null : _cancelCountdown,
                 child: const Text(
                   'Cancel & Go Back',
                   style: TextStyle(

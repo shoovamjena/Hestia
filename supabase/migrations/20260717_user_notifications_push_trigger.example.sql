@@ -1,0 +1,37 @@
+-- Optional: Database webhook / trigger alternative to call send-push on insert.
+-- Prefer calling send-push from assign-professionals (already done).
+-- Use this only if you also insert user_notifications from other paths.
+
+-- Example with pg_net (enable extension first):
+--
+-- create or replace function public.notify_user_push()
+-- returns trigger
+-- language plpgsql
+-- security definer
+-- as $$
+-- begin
+--   perform net.http_post(
+--     url := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/send-push-notification',
+--     headers := jsonb_build_object(
+--       'Content-Type', 'application/json',
+--       'Authorization', 'Bearer YOUR_SERVICE_ROLE_KEY'
+--     ),
+--     body := jsonb_build_object(
+--       'user_id', new.user_id,
+--       'title', new.title,
+--       'body', new.body,
+--       'data', jsonb_build_object(
+--         'type', new.notification_type,
+--         'booking_id', new.booking_id,
+--         'notification_id', new.id
+--       )
+--     )
+--   );
+--   return new;
+-- end;
+-- $$;
+--
+-- drop trigger if exists trg_user_notifications_push on public.user_notifications;
+-- create trigger trg_user_notifications_push
+--   after insert on public.user_notifications
+--   for each row execute function public.notify_user_push();

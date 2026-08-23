@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
-import 'home_screen.dart';
+import 'rate_session_screen.dart';
 
 class SessionCompleteScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -288,21 +288,16 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     elevation: 0,
                   ),
                   onPressed: () {
-                    // Update Supabase mock service state to complete this booking
-                    SupabaseService.completeMockBooking(
-                      caregiverName: caregiverName,
-                      serviceTitle: serviceTitle,
-                      amount: totalAmount,
-                    );
-
-                    // Navigate back to HomeScreen clearing stack
-                    Navigator.of(context).pushAndRemoveUntil(
-                      MaterialPageRoute(builder: (context) => const HomeScreen()),
-                      (route) => false,
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                        builder: (context) => RateSessionScreen(
+                          sessionData: widget.bookingData,
+                        ),
+                      ),
                     );
                   },
                   child: const Text(
-                    'Submit feedback',
+                    'Rate & tip your professional',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,

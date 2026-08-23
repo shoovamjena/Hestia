@@ -18,12 +18,59 @@ class ProntoMoneyScreen extends StatefulWidget {
 
 class _ProntoMoneyScreenState extends State<ProntoMoneyScreen> {
   static const List<int> _presetAmounts = [250, 500, 1000];
+  static const int _minAmount = 1;
+  static const int _maxAmount = 100000;
 
+  late final TextEditingController _amountController;
   int _selectedAmount = 250;
 
   double get _cashback => _selectedAmount * 0.05;
 
   double get _totalInWallet => _selectedAmount + _cashback;
+
+  @override
+  void initState() {
+    super.initState();
+    _amountController = TextEditingController(text: '$_selectedAmount');
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    super.dispose();
+  }
+
+  void _setAmount(int amount, {bool updateField = true}) {
+    final clamped = amount.clamp(_minAmount, _maxAmount);
+    setState(() => _selectedAmount = clamped);
+    if (updateField) {
+      final text = '$clamped';
+      if (_amountController.text != text) {
+        _amountController.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        );
+      }
+    }
+  }
+
+  void _onAmountTextChanged(String value) {
+    final digits = value.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) {
+      setState(() => _selectedAmount = 0);
+      return;
+    }
+    final parsed = int.tryParse(digits) ?? 0;
+    if (digits != value) {
+      _amountController.value = TextEditingValue(
+        text: digits,
+        selection: TextSelection.collapsed(offset: digits.length),
+      );
+    }
+    setState(() {
+      _selectedAmount = parsed.clamp(0, _maxAmount);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -298,7 +345,7 @@ class _ProntoMoneyScreenState extends State<ProntoMoneyScreen> {
           const SizedBox(height: 16),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(16),
@@ -308,13 +355,43 @@ class _ProntoMoneyScreenState extends State<ProntoMoneyScreen> {
               children: [
                 Align(
                   alignment: Alignment.center,
-                  child: Text(
-                    '₹$_selectedAmount',
-                    style: const TextStyle(
-                      fontSize: 40,
-                      fontWeight: FontWeight.w800,
-                      color: HestiaColors.textDark,
-                    ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Text(
+                        '₹',
+                        style: TextStyle(
+                          fontSize: 40,
+                          fontWeight: FontWeight.w800,
+                          color: HestiaColors.textDark,
+                        ),
+                      ),
+                      IntrinsicWidth(
+                        child: TextField(
+                          controller: _amountController,
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 40,
+                            fontWeight: FontWeight.w800,
+                            color: HestiaColors.textDark,
+                          ),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.zero,
+                            hintText: '0',
+                            hintStyle: TextStyle(
+                              fontSize: 40,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFFCCCCCC),
+                            ),
+                          ),
+                          onChanged: _onAmountTextChanged,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 Positioned(
@@ -347,7 +424,9 @@ class _ProntoMoneyScreenState extends State<ProntoMoneyScreen> {
           ),
           const SizedBox(height: 10),
           Text(
-            'You will get ₹${_totalInWallet.toStringAsFixed(1)} in the wallet!',
+            _selectedAmount > 0
+                ? 'You will get ₹${_totalInWallet.toStringAsFixed(1)} in the wallet!'
+                : 'Enter an amount to top up your wallet',
             style: TextStyle(
               fontSize: 13,
               color: Colors.grey.shade700,
@@ -365,7 +444,7 @@ class _ProntoMoneyScreenState extends State<ProntoMoneyScreen> {
                     right: amount != _presetAmounts.last ? 10 : 0,
                   ),
                   child: GestureDetector(
-                    onTap: () => setState(() => _selectedAmount = amount),
+                    onTap: () => _setAmount(amount),
                     child: Container(
                       padding: const EdgeInsets.fromLTRB(8, 14, 8, 10),
                       decoration: BoxDecoration(
@@ -424,26 +503,32 @@ class _ProntoMoneyScreenState extends State<ProntoMoneyScreen> {
             width: double.infinity,
             height: 52,
             child: ElevatedButton(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Add ₹$_selectedAmount to wallet is coming soon!',
-                    ),
-                    backgroundColor: HestiaColors.primary,
-                  ),
-                );
-              },
+              onPressed: _selectedAmount > 0
+                  ? () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Add ₹$_selectedAmount to wallet is coming soon!',
+                          ),
+                          backgroundColor: HestiaColors.primary,
+                        ),
+                      );
+                    }
+                  : null,
               style: ElevatedButton.styleFrom(
                 backgroundColor: HestiaColors.primary,
                 foregroundColor: Colors.white,
+                disabledBackgroundColor: const Color(0xFFCFCFCF),
+                disabledForegroundColor: Colors.white,
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),
                 ),
               ),
               child: Text(
-                'Add ₹$_selectedAmount to wallet',
+                _selectedAmount > 0
+                    ? 'Add ₹$_selectedAmount to wallet'
+                    : 'Enter amount',
                 style: const TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,

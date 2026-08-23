@@ -1,4 +1,5 @@
-import 'dart:ui';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/colors.dart';
@@ -16,25 +17,69 @@ class ActivityLogScreen extends StatefulWidget {
 class _ActivityLogScreenState extends State<ActivityLogScreen> {
   final List<Map<String, dynamic>> _activityLogs = [];
   RealtimeChannel? _activityChannel;
+  Timer? _pollTimer;
   bool _isLoading = true;
+  bool _isRefreshing = false;
 
   @override
   void initState() {
     super.initState();
     _loadActivityLogs();
     _subscribeToActivityLogs();
+    // Fallback poll so logs still appear if realtime is delayed.
+    _pollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      _loadActivityLogs(silent: true);
+    });
   }
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     if (_activityChannel != null) {
       SupabaseService.client.removeChannel(_activityChannel!);
     }
     super.dispose();
   }
 
-  Future<void> _loadActivityLogs() async {
-    final sessionId = widget.bookingData['session_id']?.toString();
+  String? get _sessionId => widget.bookingData['session_id']?.toString();
+
+  String _logKey(Map<String, dynamic> log) {
+    final id = log['id']?.toString();
+    if (id != null && id.isNotEmpty) return id;
+    return '${log['logged_at']}|${log['activity_type']}|${log['note']}';
+  }
+
+  void _mergeLogs(List<Map<String, dynamic>> incoming, {bool replace = false}) {
+    if (replace) {
+      _activityLogs
+        ..clear()
+        ..addAll(incoming);
+      return;
+    }
+
+    final existing = <String>{};
+    for (final log in _activityLogs) {
+      existing.add(_logKey(log));
+    }
+
+    for (final log in incoming.reversed) {
+      final key = _logKey(log);
+      if (existing.contains(key)) continue;
+      existing.add(key);
+      _activityLogs.insert(0, Map<String, dynamic>.from(log));
+    }
+
+    _activityLogs.sort((a, b) {
+      final aTime = DateTime.tryParse(a['logged_at']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bTime = DateTime.tryParse(b['logged_at']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return bTime.compareTo(aTime);
+    });
+  }
+
+  Future<void> _loadActivityLogs({bool silent = false}) async {
+    final sessionId = _sessionId;
     if (sessionId == null || sessionId.isEmpty) {
       if (mounted) {
         setState(() {
@@ -45,22 +90,52 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
       return;
     }
 
-    final logs = await SupabaseService.getActivityLogs(sessionId);
+    if (_isRefreshing) return;
+    _isRefreshing = true;
+
+    try {
+      final logs = await SupabaseService.getActivityLogs(sessionId);
+      if (!mounted) return;
+      setState(() {
+        _mergeLogs(logs, replace: true);
+        _isLoading = false;
+      });
+    } finally {
+      _isRefreshing = false;
+      if (!silent && mounted && _isLoading) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  void _upsertRealtimeLog(Map<String, dynamic> record) {
     if (!mounted) return;
+    final key = _logKey(record);
+    final existingIndex =
+        _activityLogs.indexWhere((log) => _logKey(log) == key);
+
     setState(() {
-      _activityLogs
-        ..clear()
-        ..addAll(logs);
-      _isLoading = false;
+      if (existingIndex >= 0) {
+        _activityLogs[existingIndex] = Map<String, dynamic>.from(record);
+      } else {
+        _activityLogs.insert(0, Map<String, dynamic>.from(record));
+      }
+      _activityLogs.sort((a, b) {
+        final aTime = DateTime.tryParse(a['logged_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = DateTime.tryParse(b['logged_at']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
     });
   }
 
   void _subscribeToActivityLogs() {
-    final sessionId = widget.bookingData['session_id']?.toString();
+    final sessionId = _sessionId;
     if (sessionId == null || sessionId.isEmpty) return;
 
-    _activityChannel = Supabase.instance.client
-        .channel('session_activity_$sessionId')
+    _activityChannel = SupabaseService.client
+        .channel('session_activity_live_$sessionId')
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'public',
@@ -71,243 +146,260 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
             value: sessionId,
           ),
           callback: (payload) {
-            if (!mounted) return;
-            setState(() {
-              _activityLogs.insert(0, Map<String, dynamic>.from(payload.newRecord));
-            });
+            _upsertRealtimeLog(
+              Map<String, dynamic>.from(payload.newRecord),
+            );
           },
         )
-        .subscribe();
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'activity_logs',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'session_id',
+            value: sessionId,
+          ),
+          callback: (payload) {
+            _upsertRealtimeLog(
+              Map<String, dynamic>.from(payload.newRecord),
+            );
+          },
+        )
+        .subscribe((status, [error]) {
+          // If realtime drops, force a refresh so professional sync still shows.
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            _loadActivityLogs(silent: true);
+          }
+        });
+  }
+
+  String _formatTime(dynamic timeObj) {
+    if (timeObj == null) return '--:--';
+    final DateTime parsed =
+        timeObj is DateTime ? timeObj : DateTime.parse(timeObj.toString());
+    final local = parsed.toLocal();
+    int hour = local.hour;
+    final minute = local.minute.toString().padLeft(2, '0');
+    final period = hour >= 12 ? 'PM' : 'AM';
+    if (hour > 12) hour -= 12;
+    if (hour == 0) hour = 12;
+    return '$hour:$minute $period';
   }
 
   @override
   Widget build(BuildContext context) {
     final bookingData = widget.bookingData;
-    final caregiverName = bookingData['caregiver_name'] ?? 'Sunita Rao';
-    final serviceTitle = bookingData['title'] ?? 'Post-Delivery Care';
+    final caregiverName = bookingData['caregiver_name'] ?? 'Professional';
+    final serviceTitle = bookingData['title'] ?? 'Care';
 
-    String formatTime(dynamic timeObj) {
-      if (timeObj == null) return '--:--';
-      final DateTime parsed = timeObj is DateTime 
-          ? timeObj 
-          : DateTime.parse(timeObj.toString());
-      final local = parsed.toLocal();
-      int hour = local.hour;
-      final minute = local.minute.toString().padLeft(2, '0');
-      final period = hour >= 12 ? 'PM' : 'AM';
-      if (hour > 12) hour -= 12;
-      if (hour == 0) hour = 12;
-      return '$hour:$minute $period';
-    }
-
-    return Container(
-        color: HestiaColors.appBackground,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          leading: Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: HestiaColors.primary.withValues(alpha: 0.15),
-                    width: 1,
-                  ),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x0A000000),
-                      blurRadius: 4,
-                      offset: Offset(0, 2),
-                    ),
-                  ],
+    return Scaffold(
+      backgroundColor: const Color(0xFFF3F2F0),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        leading: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: GestureDetector(
+            onTap: () => Navigator.of(context).pop(),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFFFAF2EB),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: HestiaColors.primary.withValues(alpha: 0.15),
                 ),
-                child: const Icon(
-                  Icons.chevron_left_rounded,
-                  color: HestiaColors.primary,
-                  size: 22,
-                ),
+              ),
+              child: const Icon(
+                Icons.chevron_left_rounded,
+                color: HestiaColors.primary,
+                size: 22,
               ),
             ),
           ),
-          title: const Text(
-            'Activity log',
-            style: TextStyle(
-              color: HestiaColors.textDark,
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          centerTitle: true,
         ),
+        title: const Text(
+          'Activity log',
+          style: TextStyle(
+            color: HestiaColors.primary,
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        centerTitle: true,
+      ),
       body: Column(
         children: [
           Expanded(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Live Header Card
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFDF8F5),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: HestiaColors.primary.withValues(alpha: 0.08),
-                        width: 1.2,
+            child: RefreshIndicator(
+              color: HestiaColors.primary,
+              onRefresh: () => _loadActivityLogs(),
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 16,
                       ),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Today · $serviceTitle',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: HestiaColors.textLight,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '$caregiverName · ${formatTime(bookingData['actual_start'])}',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                color: HestiaColors.textDark,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                        // Live badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE8F5E9),
-                            borderRadius: BorderRadius.circular(14),
+                      decoration: BoxDecoration(
+                        color: HestiaColors.primary,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: HestiaColors.primary.withValues(alpha: 0.28),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 6,
-                                height: 6,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF2E7D32),
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              const Text(
-                                'Live',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF2E7D32),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 28),
-
-                  // Sub-tabs row
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: const [
-                      Text(
-                        'All entries',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: HestiaColors.textDark,
-                        ),
+                        ],
                       ),
-                      Text(
-                        'Updates live',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: HestiaColors.textLight,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  if (_isLoading)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 48),
-                      child: Center(
-                        child: CircularProgressIndicator(color: HestiaColors.primary),
-                      ),
-                    )
-                  else if (_activityLogs.isEmpty)
-                    _glassCard(
-                      padding: const EdgeInsets.all(18),
-                      borderRadius: 18,
-                      child: const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Row(
                         children: [
-                          Text(
-                            'No activity logged yet',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: HestiaColors.textDark,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Today · $serviceTitle',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.white.withValues(alpha: 0.82),
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '$caregiverName · ${_formatTime(bookingData['actual_start'])}',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          SizedBox(height: 4),
-                          Text(
-                            'Activity will appear here as the session progresses.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: HestiaColors.textLight,
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF81C784),
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Text(
+                                  'Live',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
                       ),
-                    )
-                  else
-                    ListView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _activityLogs.length,
-                      itemBuilder: (context, index) {
+                    ),
+                    const SizedBox(height: 22),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'All entries',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: HestiaColors.textDark,
+                          ),
+                        ),
+                        Text(
+                          'Updates live',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    if (_isLoading)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 48),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: HestiaColors.primary,
+                          ),
+                        ),
+                      )
+                    else if (_activityLogs.isEmpty)
+                      _entryCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'No activity logged yet',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: HestiaColors.textDark,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Activity will appear here as the professional syncs updates.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey.shade600,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      ...List.generate(_activityLogs.length, (index) {
                         final item = _activityLogs[index];
                         final loggedAt = item['logged_at'];
                         final isLatest = index == 0;
-                        final primaryText = (item['note']?.toString().trim().isNotEmpty ?? false)
-                            ? item['note'].toString().trim()
-                            : (item['activity_type']?.toString() ?? 'Activity update');
-                        final secondaryType = item['activity_type']?.toString() ?? 'Activity';
-                        final secondaryText = '$secondaryType · ${formatTime(loggedAt)}';
-                        final isLast = index == _activityLogs.length - 1;
+                        final primaryText =
+                            (item['note']?.toString().trim().isNotEmpty ??
+                                    false)
+                                ? item['note'].toString().trim()
+                                : (item['activity_type']?.toString() ??
+                                    'Activity update');
+                        final secondaryType =
+                            item['activity_type']?.toString() ?? 'Activity';
+                        final secondaryText =
+                            '$secondaryType · ${_formatTime(loggedAt)}';
 
                         return Padding(
-                          padding: EdgeInsets.only(bottom: isLast ? 0 : 16),
-                          child: _glassCard(
-                            padding: const EdgeInsets.all(16),
-                            borderRadius: 20,
-                            tint: isLatest
-                                ? Colors.white.withValues(alpha: 0.18)
-                                : Colors.white.withValues(alpha: 0.12),
+                          padding: EdgeInsets.only(
+                            bottom: index == _activityLogs.length - 1 ? 0 : 12,
+                          ),
+                          child: _entryCard(
+                            highlight: isLatest,
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -316,12 +408,9 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                   height: 34,
                                   decoration: BoxDecoration(
                                     color: isLatest
-                                        ? const Color(0x332ECC71)
-                                        : Colors.white.withValues(alpha: 0.16),
+                                        ? const Color(0xFFE8F5E9)
+                                        : const Color(0xFFFAF2EB),
                                     shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white.withValues(alpha: 0.18),
-                                    ),
                                   ),
                                   alignment: Alignment.center,
                                   child: Container(
@@ -329,8 +418,8 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                     height: 8,
                                     decoration: BoxDecoration(
                                       color: isLatest
-                                          ? const Color(0xFF2ECC71)
-                                          : const Color(0xFFF3C16B),
+                                          ? const Color(0xFF2E7D32)
+                                          : HestiaColors.primary,
                                       shape: BoxShape.circle,
                                     ),
                                   ),
@@ -338,18 +427,20 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Expanded(
                                             child: Text(
                                               primaryText,
                                               style: const TextStyle(
                                                 fontSize: 14,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.white,
+                                                fontWeight: FontWeight.w800,
+                                                color: HestiaColors.textDark,
                                                 height: 1.35,
                                               ),
                                             ),
@@ -357,29 +448,34 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                           if (isLatest) ...[
                                             const SizedBox(width: 8),
                                             Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 7,
+                                                vertical: 2,
+                                              ),
                                               decoration: BoxDecoration(
-                                                color: const Color(0x332ECC71),
-                                                borderRadius: BorderRadius.circular(999),
+                                                color: const Color(0xFFE8F5E9),
+                                                borderRadius:
+                                                    BorderRadius.circular(999),
                                               ),
                                               child: const Text(
                                                 'New',
                                                 style: TextStyle(
-                                                  fontSize: 9,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.white,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: Color(0xFF2E7D32),
                                                 ),
                                               ),
                                             ),
                                           ],
                                         ],
                                       ),
-                                      const SizedBox(height: 6),
+                                      const SizedBox(height: 4),
                                       Text(
                                         secondaryText,
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color: Colors.white.withValues(alpha: 0.82),
+                                          color: Colors.grey.shade600,
                                         ),
                                       ),
                                     ],
@@ -387,34 +483,29 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                                 ),
                                 const SizedBox(width: 10),
                                 Text(
-                                  formatTime(loggedAt),
-                                  style: TextStyle(
+                                  _formatTime(loggedAt),
+                                  style: const TextStyle(
                                     fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white.withValues(alpha: 0.86),
+                                    fontWeight: FontWeight.w700,
+                                    color: HestiaColors.primary,
                                   ),
                                 ),
                               ],
                             ),
                           ),
                         );
-                      },
-                    ),
-                ],
+                      }),
+                  ],
+                ),
               ),
             ),
           ),
-
-          // Download sticky footer
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
             decoration: BoxDecoration(
               color: Colors.white,
               border: Border(
-                top: BorderSide(
-                  color: Colors.grey.withValues(alpha: 0.1),
-                  width: 1,
-                ),
+                top: BorderSide(color: Colors.grey.shade200),
               ),
             ),
             child: SafeArea(
@@ -435,7 +526,7 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
                       'Download full log',
                       style: TextStyle(
                         fontSize: 15,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w800,
                         color: HestiaColors.textDark,
                       ),
                     ),
@@ -451,40 +542,27 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
           ),
         ],
       ),
-     ),
     );
   }
 
-  Widget _glassCard({
+  Widget _entryCard({
     required Widget child,
-    EdgeInsetsGeometry? padding,
-    double borderRadius = 20,
-    Color? tint,
+    bool highlight = false,
   }) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(borderRadius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            color: tint ?? Colors.white.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(borderRadius),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.18),
-              width: 1.1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 14,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: child,
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: highlight
+              ? HestiaColors.primary
+              : HestiaColors.primary.withValues(alpha: 0.55),
+          width: highlight ? 1.6 : 1.3,
         ),
       ),
+      child: child,
     );
   }
 }

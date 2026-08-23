@@ -5,7 +5,8 @@ import '../services/notifications_state.dart';
 import '../services/supabase_service.dart';
 import 'landing_screen.dart';
 import 'search_location_screen.dart';
-import 'otp_screen.dart';
+import 'pronto_money_screen.dart';
+import 'refer_and_earn_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   final bool showBackButton;
@@ -61,7 +62,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               _name = profileMap['name'] ?? _name;
               _email = profileMap['email'] ?? _email;
               _phone = profileMap['phone'] ?? _phone;
-              _isPhoneVerified = profileMap['phone_verified'] == true || SupabaseService.isPhoneVerified();
+              _isPhoneVerified =
+                  profileMap['phone_verified'] == true ||
+                  SupabaseService.isPhoneVerified();
               _primaryReason = profileMap['primary_reason'] ?? _primaryReason;
               if (profileMap['address'] != null) {
                 _address = Map<String, dynamic>.from(profileMap['address']);
@@ -157,9 +160,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final nameController = TextEditingController(text: _name);
     final emailController = TextEditingController(text: _email);
     final flatController = TextEditingController(text: _address['flat'] ?? '');
-    final streetController = TextEditingController(text: _address['street'] ?? '');
+    final streetController = TextEditingController(
+      text: _address['street'] ?? '',
+    );
     final cityController = TextEditingController(text: _address['city'] ?? '');
-    final pincodeController = TextEditingController(text: _address['pincode'] ?? _address['pin_code'] ?? '');
+    final pincodeController = TextEditingController(
+      text: _address['pincode'] ?? _address['pin_code'] ?? '',
+    );
     final formKey = GlobalKey<FormState>();
 
     showDialog(
@@ -168,14 +175,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return AlertDialog(
           backgroundColor: HestiaColors.background,
           surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Row(
             children: const [
-              Icon(Icons.edit_note_rounded, color: HestiaColors.primary, size: 28),
+              Icon(
+                Icons.edit_note_rounded,
+                color: HestiaColors.primary,
+                size: 28,
+              ),
               SizedBox(width: 8),
               Text(
                 'Edit Profile & Address',
-                style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: HestiaColors.textDark,
+                ),
               ),
             ],
           ),
@@ -190,29 +206,69 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   children: [
                     const Text(
                       'PERSONAL DETAILS',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent, letterSpacing: 1.0),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: HestiaColors.textAccent,
+                        letterSpacing: 1.0,
+                      ),
                     ),
                     const SizedBox(height: 12),
-                    _buildInputField('Full Name', nameController, (val) => val == null || val.trim().isEmpty ? 'Enter name' : null),
+                    _buildInputField(
+                      'Full Name',
+                      nameController,
+                      (val) => val == null || val.trim().isEmpty
+                          ? 'Enter name'
+                          : null,
+                    ),
                     const SizedBox(height: 12),
                     _buildInputField('Email Address', emailController, (val) {
-                      if (val == null || val.trim().isEmpty) return 'Enter email';
+                      if (val == null || val.trim().isEmpty) {
+                        return 'Enter email';
+                      }
                       if (!val.contains('@')) return 'Enter valid email';
                       return null;
                     }),
                     const SizedBox(height: 20),
                     const Text(
                       'ADDRESS DETAILS',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent, letterSpacing: 1.0),
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: HestiaColors.textAccent,
+                        letterSpacing: 1.0,
+                      ),
                     ),
                     const SizedBox(height: 12),
-                    _buildInputField('Flat / House No. / Building', flatController, null),
+                    _buildInputField(
+                      'Flat / House No. / Building',
+                      flatController,
+                      null,
+                    ),
                     const SizedBox(height: 12),
-                    _buildInputField('Street / Locality', streetController, (val) => val == null || val.trim().isEmpty ? 'Enter street' : null),
+                    _buildInputField(
+                      'Street / Locality',
+                      streetController,
+                      (val) => val == null || val.trim().isEmpty
+                          ? 'Enter street'
+                          : null,
+                    ),
                     const SizedBox(height: 12),
-                    _buildInputField('City', cityController, (val) => val == null || val.trim().isEmpty ? 'Enter city' : null),
+                    _buildInputField(
+                      'City',
+                      cityController,
+                      (val) => val == null || val.trim().isEmpty
+                          ? 'Enter city'
+                          : null,
+                    ),
                     const SizedBox(height: 12),
-                    _buildInputField('Pincode', pincodeController, (val) => val == null || val.trim().isEmpty ? 'Enter pincode' : null),
+                    _buildInputField(
+                      'Pincode',
+                      pincodeController,
+                      (val) => val == null || val.trim().isEmpty
+                          ? 'Enter pincode'
+                          : null,
+                    ),
                   ],
                 ),
               ),
@@ -227,7 +283,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: HestiaColors.primary,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: () {
                 if (formKey.currentState!.validate()) {
@@ -253,22 +311,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildInputField(String label, TextEditingController controller, String? Function(String?)? validator) {
+  Widget _buildInputField(
+    String label,
+    TextEditingController controller,
+    String? Function(String?)? validator,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           label.toUpperCase(),
-          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey),
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey,
+          ),
         ),
         const SizedBox(height: 6),
         TextFormField(
           controller: controller,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: HestiaColors.textDark),
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: HestiaColors.textDark,
+          ),
           decoration: InputDecoration(
             filled: true,
             fillColor: Colors.grey.shade50,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide(color: Colors.grey.shade300),
@@ -279,7 +352,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+              borderSide: const BorderSide(
+                color: HestiaColors.primary,
+                width: 1.5,
+              ),
             ),
           ),
           validator: validator,
@@ -306,10 +382,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return AlertDialog(
           backgroundColor: HestiaColors.background,
           surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: const Text(
             'Edit Personal Details',
-            style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: HestiaColors.textDark,
+            ),
           ),
           content: Form(
             key: formKey,
@@ -320,7 +401,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 children: [
                   const Text(
                     'FULL NAME',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: HestiaColors.textAccent,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   TextFormField(
@@ -338,15 +423,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                        borderSide: const BorderSide(
+                          color: HestiaColors.primary,
+                          width: 1.5,
+                        ),
                       ),
                     ),
-                    validator: (val) => val == null || val.trim().isEmpty ? 'Enter name' : null,
+                    validator: (val) =>
+                        val == null || val.trim().isEmpty ? 'Enter name' : null,
                   ),
                   const SizedBox(height: 16),
                   const Text(
                     'EMAIL ADDRESS',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: HestiaColors.textAccent,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   TextFormField(
@@ -364,11 +457,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                        borderSide: const BorderSide(
+                          color: HestiaColors.primary,
+                          width: 1.5,
+                        ),
                       ),
                     ),
                     validator: (val) {
-                      if (val == null || val.trim().isEmpty) return 'Enter email';
+                      if (val == null || val.trim().isEmpty) {
+                        return 'Enter email';
+                      }
                       if (!val.contains('@')) return 'Enter valid email';
                       return null;
                     },
@@ -376,7 +474,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const SizedBox(height: 16),
                   const Text(
                     'PHONE NUMBER',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: HestiaColors.textAccent),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: HestiaColors.textAccent,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   TextFormField(
@@ -388,7 +490,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ],
                     decoration: InputDecoration(
                       prefixIcon: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 14,
+                        ),
                         child: Text(
                           '+91 ',
                           style: TextStyle(
@@ -398,7 +503,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                         ),
                       ),
-                      prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 0,
+                        minHeight: 0,
+                      ),
                       filled: true,
                       fillColor: Colors.grey.shade100,
                       border: OutlineInputBorder(
@@ -411,7 +519,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: HestiaColors.primary, width: 1.5),
+                        borderSide: const BorderSide(
+                          color: HestiaColors.primary,
+                          width: 1.5,
+                        ),
                       ),
                     ),
                     validator: (val) {
@@ -437,14 +548,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: HestiaColors.primary,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: () {
                 if (formKey.currentState!.validate()) {
                   setState(() {
                     _name = nameController.text.trim();
                     _email = emailController.text.trim();
-                    String typedPhone = phoneController.text.trim().replaceAll(' ', '');
+                    String typedPhone = phoneController.text.trim().replaceAll(
+                      ' ',
+                      '',
+                    );
                     if (typedPhone.isNotEmpty && !typedPhone.startsWith('+')) {
                       typedPhone = '+91$typedPhone';
                     }
@@ -469,32 +585,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return AlertDialog(
           backgroundColor: HestiaColors.background,
           surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: const Text(
             'Service Preferred',
-            style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: HestiaColors.textDark,
+            ),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
-            children: [
-              'Post-Delivery Care',
-              'Mobility Support',
-              'Elder Care',
-              'Babysitting',
-              'Other',
-            ].map((reason) {
-              return ListTile(
-                title: Text(reason, style: const TextStyle(fontWeight: FontWeight.w600)),
-                trailing: _primaryReason == reason ? const Icon(Icons.check_circle, color: HestiaColors.primary) : null,
-                onTap: () {
-                  setState(() {
-                    _primaryReason = reason;
-                  });
-                  Navigator.pop(context);
-                  _saveProfileChanges();
-                },
-              );
-            }).toList(),
+            children:
+                [
+                  'Post-Delivery Care',
+                  'Mobility Support',
+                  'Elder Care',
+                  'Babysitting',
+                  'Other',
+                ].map((reason) {
+                  return ListTile(
+                    title: Text(
+                      reason,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    trailing: _primaryReason == reason
+                        ? const Icon(
+                            Icons.check_circle,
+                            color: HestiaColors.primary,
+                          )
+                        : null,
+                    onTap: () {
+                      setState(() {
+                        _primaryReason = reason;
+                      });
+                      Navigator.pop(context);
+                      _saveProfileChanges();
+                    },
+                  );
+                }).toList(),
           ),
         );
       },
@@ -550,10 +680,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return AlertDialog(
           backgroundColor: HestiaColors.background,
           surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: const Text(
             'Confirm Logout',
-            style: TextStyle(fontWeight: FontWeight.bold, color: HestiaColors.textDark),
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: HestiaColors.textDark,
+            ),
           ),
           content: const Text(
             'Are you sure you want to log out of your Hestia account?',
@@ -568,7 +703,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFC0392B), // Crimson Red
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: () {
                 Navigator.pop(dialogContext);
@@ -585,436 +722,452 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final initials = _getInitials(_name);
-    final String addressString = _address['street'].toString().trim().isNotEmpty
-        ? '${_address['flat'] ?? ''} ${_address['street']}, ${_address['city'] ?? ''} - ${_address['pincode'] ?? ''}'
-        : 'No address set';
+    final mutedBg = Color.alphaBlend(
+      HestiaColors.mutedBrown.withValues(alpha: 0.18),
+      const Color(0xFFF5F6FA),
+    );
 
     return Scaffold(
-      body: Container(
-        color: HestiaColors.appBackground,
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: Colors.white))
-            : SafeArea(
-                child: Column(
-                  children: [
-                    // Custom Integrated AppBar with white coloring for the dark gradient top
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          if (widget.showBackButton)
-                            GestureDetector(
-                              onTap: () => Navigator.pop(context),
-                              child: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: const Icon(Icons.chevron_left, color: Colors.white, size: 28),
-                              ),
-                            )
-                          else
-                            const SizedBox(width: 40),
-                          const Text(
-                            'Hestia Profile',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                              fontSize: 20,
-                            ),
+      backgroundColor: mutedBg,
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: HestiaColors.primary),
+            )
+          : Column(
+              children: [
+                _buildHeader(initials),
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                    child: Column(
+                      children: [
+                        Transform.translate(
+                          offset: const Offset(0, -28),
+                          child: Column(
+                            children: [
+                              _buildQuickActions(),
+                              const SizedBox(height: 12),
+                              _buildReferCard(),
+                              const SizedBox(height: 12),
+                              _buildMenuList(),
+                            ],
                           ),
-                          const SizedBox(width: 40), // Spacer to balance the back button
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
 
-                    // Scrollable content
-                    Expanded(
-                      child: SingleChildScrollView(
-                        physics: const BouncingScrollPhysics(),
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildHeader(String initials) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(
+        8,
+        MediaQuery.of(context).padding.top + 4,
+        16,
+        48,
+      ),
+      decoration: const BoxDecoration(color: HestiaColors.primary),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (widget.showBackButton)
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                )
+              else
+                const SizedBox(width: 48),
+              const Expanded(
+                child: Text(
+                  'Profile',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE8D9CB),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white24, width: 2),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    initials,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: HestiaColors.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _phone.isNotEmpty ? _phone : 'No phone added',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      GestureDetector(
+                        onTap: _showEditPersonalDetailsDialog,
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Profile Header Glassmorphic Badge
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.15),
-                                border: Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1),
-                                borderRadius: BorderRadius.circular(24),
-                              ),
-                              child: Row(
-                                children: [
-                                  Container(
-                                    width: 80,
-                                    height: 80,
-                                    decoration: const BoxDecoration(
-                                      color: Colors.white24,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    alignment: Alignment.center,
-                                    child: Text(
-                                      initials,
-                                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 20),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _name,
-                                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          _phone,
-                                          style: const TextStyle(fontSize: 14, color: Colors.white70),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          _email,
-                                          style: const TextStyle(fontSize: 14, color: Colors.white70),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
+                            Text(
+                              'Edit profile',
+                              style: TextStyle(
+                                color: Color(0xFFF5D9A8),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
-
-                            const SizedBox(height: 28),
-
-                            // Personal Details Card
-                            _buildSectionHeader('Personal Details', _showEditPersonalDetailsDialog),
-                            const SizedBox(height: 12),
-                            _buildProfileCard([
-                              _buildDetailRow(Icons.person_outline, 'Full Name', _name),
-                              const Divider(height: 24, thickness: 0.8),
-                              _buildDetailRow(Icons.email_outlined, 'Email Address', _email),
-                              const Divider(height: 24, thickness: 0.8),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.phone_outlined, color: HestiaColors.primary, size: 20),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          'Phone Number',
-                                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          _phone.isNotEmpty ? _phone : 'Not provided',
-                                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: HestiaColors.textDark),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  _buildPhoneVerificationBadge(),
-                                ],
-                              ),
-                            ]),
-
-                            const SizedBox(height: 28),
-
-                            // Saved Address Card
-                            _buildSectionHeader('Primary Address', () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => const SearchLocationScreen(),
-                                ),
-                              ).then((_) => _loadProfileData());
-                            }),
-                            const SizedBox(height: 12),
-                            _buildProfileCard([
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Icon(Icons.location_on_outlined, color: HestiaColors.primary, size: 22),
-                                  const SizedBox(width: 14),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          'Current Location',
-                                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          addressString,
-                                          style: const TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w600,
-                                            color: HestiaColors.textDark,
-                                            height: 1.4,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ]),
-
-                            const SizedBox(height: 28),
-
-                            // Care Profile Card
-                            _buildSectionHeader('Care Profile', _showChangeReasonDialog, actionLabel: 'Change Service'),
-                            const SizedBox(height: 12),
-                            _buildProfileCard([
-                              _buildDetailRow(Icons.health_and_safety_outlined, 'Service Preferred', _primaryReason),
-                            ]),
-
-                            const SizedBox(height: 36),
-
-                            // Logout Button
-                            SizedBox(
-                              width: double.infinity,
-                              height: 56,
-                              child: OutlinedButton(
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xFFC0392B),
-                                  side: const BorderSide(color: Color(0xFFFADBD8), width: 1.5),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                ),
-                                onPressed: _showLogoutConfirmationDialog,
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: const [
-                                    Icon(Icons.logout_rounded, size: 20),
-                                    SizedBox(width: 8),
-                                    Text('Log Out', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              ),
+                            SizedBox(width: 4),
+                            Icon(
+                              Icons.play_arrow_rounded,
+                              color: Color(0xFFF5D9A8),
+                              size: 16,
                             ),
-
-                            const SizedBox(height: 40),
                           ],
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildSectionHeader(String title, VoidCallback onAction, {String actionLabel = 'Edit'}) {
+  Widget _buildQuickActions() {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Expanded(
-          child: Text(
-            title,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: HestiaColors.textDark),
+          child: _quickActionCard(
+            icon: Icons.assignment_outlined,
+            label: 'My bookings',
+            onTap: () {
+              Navigator.of(context).pop();
+            },
           ),
         ),
-        const SizedBox(width: 8),
-        GestureDetector(
-          onTap: onAction,
-          child: Text(
-            actionLabel,
-            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: HestiaColors.primary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _quickActionCard(
+            icon: Icons.account_balance_wallet_outlined,
+            label: 'Hestia Money',
+            badge: '₹0',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ProntoMoneyScreen()),
+              );
+            },
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _quickActionCard(
+            icon: Icons.headset_mic_outlined,
+            label: 'Help & Support',
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Help & Support is coming soon!'),
+                  backgroundColor: HestiaColors.primary,
+                ),
+              );
+            },
           ),
         ),
       ],
     );
   }
 
-  Widget _buildProfileCard(List<Widget> children) {
+  Widget _quickActionCard({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    String? badge,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 96,
+        padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: HestiaColors.textDark, size: 24),
+            const Spacer(),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: HestiaColors.textDark,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+                if (badge != null)
+                  Container(
+                    margin: const EdgeInsets.only(left: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: HestiaColors.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      badge,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: HestiaColors.primary,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReferCard() {
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const ReferAndEarnScreen()));
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFAF2EB),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.card_giftcard,
+                color: Color(0xFFC9A227),
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              'Refer & earn',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: HestiaColors.textDark,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3CD),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text(
+                'Upto ₹100',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF9A6B1F),
+                ),
+              ),
+            ),
+            const Spacer(),
+            Icon(Icons.chevron_right, color: Colors.grey.shade400),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenuList() {
+    final items = <({IconData icon, String label, VoidCallback onTap})>[
+      (
+        icon: Icons.menu_book_outlined,
+        label: 'Saved addresses',
+        onTap: () {
+          Navigator.of(context)
+              .push(
+                MaterialPageRoute(builder: (_) => const SearchLocationScreen()),
+              )
+              .then((_) => _loadProfileData());
+        },
+      ),
+      (
+        icon: Icons.info_outline,
+        label: 'About us',
+        onTap: () => _comingSoon('About us'),
+      ),
+      (
+        icon: Icons.assignment_outlined,
+        label: 'Terms of services',
+        onTap: () => _comingSoon('Terms of services'),
+      ),
+      (
+        icon: Icons.privacy_tip_outlined,
+        label: 'Privacy policy',
+        onTap: () => _comingSoon('Privacy policy'),
+      ),
+      (
+        icon: Icons.person_remove_outlined,
+        label: 'Request account deletion',
+        onTap: () => _comingSoon('Account deletion'),
+      ),
+      (
+        icon: Icons.logout_rounded,
+        label: 'Log out',
+        onTap: _showLogoutConfirmationDialog,
+      ),
+    ];
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade100, width: 1.2),
-        boxShadow: const [
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
           BoxShadow(
-            color: Color(0x04000000),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 10,
-            offset: Offset(0, 4),
+            offset: const Offset(0, 3),
           ),
         ],
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: children,
-      ),
-    );
-  }
-
-  Widget _buildDetailRow(IconData icon, String label, String value) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Icon(icon, color: HestiaColors.primary, size: 20),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey),
+        children: [
+          for (int i = 0; i < items.length; i++) ...[
+            if (i > 0)
+              Divider(height: 1, color: Colors.grey.shade200, indent: 56),
+            InkWell(
+              onTap: items[i].onTap,
+              borderRadius: BorderRadius.vertical(
+                top: i == 0 ? const Radius.circular(16) : Radius.zero,
+                bottom: i == items.length - 1
+                    ? const Radius.circular(16)
+                    : Radius.zero,
               ),
-              const SizedBox(height: 4),
-              Text(
-                value.isNotEmpty ? value : 'Not provided',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: HestiaColors.textDark),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPhoneVerificationBadge() {
-    if (_phone.isEmpty) {
-      return GestureDetector(
-        onTap: _showEditPersonalDetailsDialog,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: HestiaColors.primary.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: HestiaColors.primary.withValues(alpha: 0.3), width: 1.0),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.add_rounded, color: HestiaColors.primary, size: 14),
-              SizedBox(width: 4),
-              Text(
-                'Add Phone',
-                style: TextStyle(
-                  color: HestiaColors.primary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 16,
                 ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-    
-    if (_isPhoneVerified) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: Colors.green.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.green.withValues(alpha: 0.3), width: 1.0),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: const [
-            Icon(Icons.check_circle, color: Colors.green, size: 14),
-            SizedBox(width: 4),
-            Text(
-              'Verified',
-              style: TextStyle(
-                color: Colors.green,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
+                child: Row(
+                  children: [
+                    Icon(
+                      items[i].icon,
+                      color: items[i].label == 'Log out'
+                          ? const Color(0xFFC0392B)
+                          : HestiaColors.textDark,
+                      size: 22,
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        items[i].label,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: items[i].label == 'Log out'
+                              ? const Color(0xFFC0392B)
+                              : HestiaColors.textDark,
+                        ),
+                      ),
+                    ),
+                    if (items[i].label != 'Log out')
+                      Icon(Icons.chevron_right, color: Colors.grey.shade400),
+                  ],
+                ),
               ),
             ),
           ],
-        ),
-      );
-    } else {
-      return GestureDetector(
-        onTap: _startPhoneVerification,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: const Color(0xFFC0392B).withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFC0392B).withValues(alpha: 0.3), width: 1.0),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.warning_amber_rounded, color: Color(0xFFC0392B), size: 14),
-              SizedBox(width: 4),
-              Text(
-                'Verify Now',
-                style: TextStyle(
-                  color: Color(0xFFC0392B),
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-  }
-
-  Future<void> _startPhoneVerification() async {
-    if (_phone.isEmpty) return;
-    
-    // Show a loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: HestiaColors.primary),
+        ],
       ),
     );
-    
-    try {
-      final phone = _phone.startsWith('+') ? _phone : '+91${_phone.replaceAll(' ', '')}';
-      if (SupabaseService.currentUser != null) {
-        await SupabaseService.sendPhoneVerificationOtp(phone: phone);
-      } else {
-        await SupabaseService.signInWithOtp(phone: phone);
-      }
-      if (mounted) {
-        Navigator.pop(context); // Close loading indicator
-        // Navigate to OTP screen for phone verification
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => OtpScreen(
-              contactInfo: phone,
-              verificationType: OtpVerificationType.phoneSms,
-              onVerified: () {
-                // Pop the OTP screen back to the profile screen
-                Navigator.of(context).pop();
-                // Reload profile data to reflect the newly verified status
-                _loadProfileData();
-              },
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context); // Close loading indicator
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to send verification code: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-    }
+  }
+
+  void _comingSoon(String feature) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$feature is coming soon!'),
+        backgroundColor: HestiaColors.primary,
+      ),
+    );
   }
 }

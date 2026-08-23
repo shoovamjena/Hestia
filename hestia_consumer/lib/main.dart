@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'config/supabase_config.dart';
 import 'screens/splash_screen.dart';
 import 'theme/colors.dart';
 
 import 'services/notifications_state.dart';
+import 'services/push_notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,9 +19,16 @@ void main() async {
   // Initialize local phone push notifications configurations
   await NotificationsState.instance.initLocalNotifications();
 
+  // FCM for killed/background delivery (no-ops until Firebase is configured)
+  try {
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  } catch (_) {}
+  await PushNotificationService.instance.initialize();
+
   // If a persistent session exists on launch, register real-time updates immediately
   if (Supabase.instance.client.auth.currentSession != null) {
     await NotificationsState.instance.initialize();
+    await PushNotificationService.instance.syncTokenForCurrentUser();
   }
 
   // Debug: Log auth state changes and manage realtime notification subscriptions
@@ -28,7 +37,9 @@ void main() async {
     print('DEBUG AUTH EVENT: ${data.event}, Session User: ${data.session?.user.email ?? data.session?.user.phone ?? 'None'}');
     if (data.session != null) {
       NotificationsState.instance.initialize();
+      PushNotificationService.instance.syncTokenForCurrentUser();
     } else {
+      PushNotificationService.instance.clearTokenOnLogout();
       NotificationsState.instance.disposeSubscription();
     }
   });
@@ -56,7 +67,7 @@ class HestiaApp extends StatelessWidget {
         textTheme: const TextTheme(
           displayLarge: TextStyle(
             color: HestiaColors.textDark,
-            fontWeight: FontWeight.bold,
+            fontWeight: FontWeight.bold, 
           ),
           bodyLarge: TextStyle(
             color: HestiaColors.textMedium,

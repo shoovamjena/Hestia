@@ -144,6 +144,46 @@ class NotificationsState {
         )
         .subscribe();
     _realtimeChannels.add(arrivalChannel);
+
+    // When a professional is assigned (T-45 job), show a local alert if app is open.
+    // Killed/background delivery is handled by FCM via send-push-notification.
+    final assignChannel = SupabaseService.client
+        .channel('consumer_assignments_${user.id}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'bookings',
+          callback: (payload) async {
+            final row = payload.newRecord;
+            final old = payload.oldRecord;
+            final bookingId = row['id']?.toString();
+            final newPro = row['professional_id']?.toString();
+            final oldPro = old['professional_id']?.toString();
+            if (bookingId == null || newPro == null || newPro.isEmpty) return;
+            if (oldPro != null && oldPro.isNotEmpty) return;
+            if (row['user_id']?.toString() != user.id) {
+              if (!_watchedBookingIds.contains(bookingId)) {
+                _watchedBookingIds =
+                    await SupabaseService.getUserBookingIds(user.id);
+                if (!_watchedBookingIds.contains(bookingId)) return;
+              }
+            }
+
+            final bookingData =
+                await SupabaseService.getBookingStatus(bookingId);
+            final caregiverName =
+                bookingData?['caregiver_name']?.toString() ??
+                    'Your professional';
+            await _handleRealtimeNotification({
+              'id': 'assigned_${bookingId}_$newPro',
+              'title': 'Professional assigned',
+              'body':
+                  '$caregiverName will arrive for your upcoming booking.',
+            });
+          },
+        )
+        .subscribe();
+    _realtimeChannels.add(assignChannel);
   }
 
   void disposeSubscription() {

@@ -30,7 +30,9 @@ class SupabaseService {
       {
         'booking_id': 'mock-session-1',
         'title': 'Post-Delivery',
-        'scheduled_start': DateTime.now().subtract(const Duration(hours: 1, minutes: 24)),
+        'scheduled_start': DateTime.now().subtract(
+          const Duration(hours: 1, minutes: 24),
+        ),
         'duration_hours': 3.033, // 3 hrs 2 min
         'caregiver_name': 'Sunita Rao',
         'amount': 1497,
@@ -80,17 +82,17 @@ class SupabaseService {
   static String get currentUserPhone {
     final user = currentUser;
     if (user == null) return '';
-    
+
     final phone = user.phone;
     if (phone != null && phone.isNotEmpty) {
       return phone;
     }
-    
+
     final metaPhone = user.userMetadata?['phone']?.toString();
     if (metaPhone != null && metaPhone.isNotEmpty) {
       return metaPhone;
     }
-    
+
     return '';
   }
 
@@ -126,11 +128,7 @@ class SupabaseService {
     return await client.auth.signUp(
       phone: phone,
       password: password,
-      data: {
-        'full_name': name,
-        'email': email,
-        'user_type': 'consumer',
-      },
+      data: {'full_name': name, 'email': email, 'user_type': 'consumer'},
     );
   }
 
@@ -169,11 +167,7 @@ class SupabaseService {
 
     // 1. Update user metadata
     await client.auth.updateUser(
-      UserAttributes(
-        data: {
-          'phone_verified': verified,
-        },
-      ),
+      UserAttributes(data: {'phone_verified': verified}),
     );
 
     // 2. Update profile JSON
@@ -190,12 +184,10 @@ class SupabaseService {
   static Future<void> sendPhoneVerificationOtp({required String phone}) async {
     final user = currentUser;
     if (user == null) return;
-    
+
     String cleanPhone = phone.trim().replaceAll(' ', '');
     if (cleanPhone.endsWith('8144684265')) {
-      await client.auth.updateUser(
-        UserAttributes(phone: phone),
-      );
+      await client.auth.updateUser(UserAttributes(phone: phone));
     } else {
       // Simulate delay for Twilio trial sandbox bypass
       await Future.delayed(const Duration(milliseconds: 500));
@@ -261,8 +253,9 @@ class SupabaseService {
     bool? onboardingComplete,
   }) async {
     final trimmedEmail = email?.trim();
-    final dbEmail =
-        (trimmedEmail == null || trimmedEmail.isEmpty) ? null : trimmedEmail;
+    final dbEmail = (trimmedEmail == null || trimmedEmail.isEmpty)
+        ? null
+        : trimmedEmail;
     final dbPhone = _normalizeStoredPhone(phone);
 
     if (dbPhone != null) {
@@ -273,10 +266,13 @@ class SupabaseService {
             .eq('phone', dbPhone)
             .maybeSingle();
         if (conflicting != null && conflicting['id']?.toString() != id) {
-          await client.from('users').update({
-            'phone': null,
-            'updated_at': DateTime.now().toIso8601String(),
-          }).eq('id', conflicting['id']);
+          await client
+              .from('users')
+              .update({
+                'phone': null,
+                'updated_at': DateTime.now().toIso8601String(),
+              })
+              .eq('id', conflicting['id']);
         }
       } catch (e) {
         // ignore: avoid_print
@@ -339,7 +335,11 @@ class SupabaseService {
     required Map<String, dynamic> address,
     bool? withinCoverage,
   }) async {
-    await saveAddressOnly(id: id, address: address, withinCoverage: withinCoverage);
+    await saveAddressOnly(
+      id: id,
+      address: address,
+      withinCoverage: withinCoverage,
+    );
 
     await _upsertUserRecord(
       id: id,
@@ -350,8 +350,9 @@ class SupabaseService {
     );
 
     final trimmedEmail = email?.trim();
-    final dbEmail =
-        (trimmedEmail == null || trimmedEmail.isEmpty) ? null : trimmedEmail;
+    final dbEmail = (trimmedEmail == null || trimmedEmail.isEmpty)
+        ? null
+        : trimmedEmail;
 
     try {
       await uploadProfileJson(
@@ -377,17 +378,22 @@ class SupabaseService {
   }
 
   /// Coverage radius (in km) within which an address is considered serviceable
-  /// by a hub.
-  static const double coverageRadiusKm = 50.0;
+  /// by a hub. Kept in sync with `public.coverage_radius_km()` (server authority).
+  static const double coverageRadiusKm = 7.0;
 
-  /// Determine whether the given coordinates fall within the coverage range of
-  /// any known hub. Returns `true` when serviceable, `false` when out of range.
-  /// Defaults to `true` when hub data can't be resolved so we never block an
-  /// established user by mistake.
+  /// Server + client coverage check. Prefers DB RPC `resolve_hub_coverage`.
+  /// Returns `true` when serviceable, `false` when out of range.
+  /// Defaults to `true` only when hub data can't be resolved at all.
   static Future<bool> isPointWithinCoverage(double lat, double lng) async {
     try {
-      final List<dynamic> hubs =
-          await client.from('hubs').select('latitude, longitude');
+      final resolved = await resolveHubCoverage(lat, lng);
+      if (resolved != null) {
+        return resolved['zone_verified'] == true;
+      }
+
+      final List<dynamic> hubs = await client
+          .from('hubs')
+          .select('latitude, longitude');
       if (hubs.isEmpty) return true;
 
       double minDistance = double.infinity;
@@ -409,6 +415,27 @@ class SupabaseService {
     }
   }
 
+  /// Calls server RPC that returns hub_id, distance_km, zone_verified.
+  static Future<Map<String, dynamic>?> resolveHubCoverage(
+    double lat,
+    double lng,
+  ) async {
+    try {
+      final data = await client.rpc(
+        'resolve_hub_coverage',
+        params: {'p_lat': lat, 'p_lng': lng},
+      );
+      if (data is Map) {
+        return Map<String, dynamic>.from(data);
+      }
+      return null;
+    } catch (e) {
+      // ignore: avoid_print
+      print('Warning: resolve_hub_coverage RPC unavailable: $e');
+      return null;
+    }
+  }
+
   static double _haversineKm(
     double lat1,
     double lon1,
@@ -416,10 +443,64 @@ class SupabaseService {
     double lon2,
   ) {
     const p = 0.017453292519943295; // pi / 180
-    final a = 0.5 -
+    final a =
+        0.5 -
         cos((lat2 - lat1) * p) / 2 +
         cos(lat1 * p) * cos(lat2 * p) * (1 - cos((lon2 - lon1) * p)) / 2;
     return 12742 * asin(sqrt(a)); // 2 * R; R = 6371 km
+  }
+
+  /// Parse booking date + time as a **local wall-clock** DateTime.
+  /// Handles `7:30 PM`, `19:30`, `19:30:00`, and date-only / ISO date strings.
+  /// Never treats naive slot times as UTC (that shifted displays like 7:30→2:00).
+  static DateTime? parseScheduledStartLocal(dynamic dateObj, dynamic timeObj) {
+    final rawDate = dateObj?.toString().trim() ?? '';
+    final rawTime = timeObj?.toString().trim() ?? '';
+    if (rawDate.isEmpty) return null;
+
+    try {
+      // Date may arrive as "2026-07-22" or "2026-07-22T00:00:00+00:00"
+      final dateOnly = rawDate.length >= 10
+          ? rawDate.substring(0, 10)
+          : rawDate;
+      final base = DateTime.parse(dateOnly);
+      final y = base.year;
+      final m = base.month;
+      final d = base.day;
+
+      if (rawTime.isEmpty) {
+        return DateTime(y, m, d);
+      }
+
+      // Already ISO-ish "HH:MM" / "HH:MM:SS" without AM/PM
+      final upper = rawTime.toUpperCase();
+      final hasAmPm = upper.contains('AM') || upper.contains('PM');
+      if (!hasAmPm) {
+        final isoTry = DateTime.tryParse('${dateOnly}T$rawTime');
+        if (isoTry != null) {
+          return DateTime(y, m, d, isoTry.hour, isoTry.minute, isoTry.second);
+        }
+      }
+
+      final timeParts = upper.split(':');
+      if (timeParts.length < 2) return DateTime(y, m, d);
+
+      var hour = int.tryParse(timeParts[0].trim()) ?? 0;
+      final minuteToken = timeParts[1].split(RegExp(r'\s+')).first;
+      final minute = int.tryParse(minuteToken) ?? 0;
+      final isPm = upper.contains('PM');
+      final isAm = upper.contains('AM');
+      if (isPm && hour < 12) hour += 12;
+      if (isAm && hour == 12) hour = 0;
+
+      return DateTime(y, m, d, hour, minute);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static double _durationHoursFromBooking(Map<String, dynamic> row) {
+    return (row['duration_hours'] as num?)?.toDouble() ?? 2.0;
   }
 
   /// Create a profile record in the database for the user.
@@ -492,7 +573,7 @@ class SupabaseService {
     if (cleanPhone.length == 10) {
       cleanPhone = '91$cleanPhone';
     }
-    
+
     if (user != null) {
       // SCENARIO A: User is already logged in (verifying phone from profile screen)
       if (cleanPhone.endsWith('8144684265')) {
@@ -502,32 +583,35 @@ class SupabaseService {
           type: OtpType.phoneChange,
         );
         try {
-          await client.from('users').update({
-            'phone': phone,
-            'updated_at': DateTime.now().toIso8601String(),
-          }).eq('id', user.id);
+          await client
+              .from('users')
+              .update({
+                'phone': phone,
+                'updated_at': DateTime.now().toIso8601String(),
+              })
+              .eq('id', user.id);
         } catch (_) {}
         return response;
       } else {
         if (token == '123456') {
           // Bypass: Update metadata and users table directly without changing current session
           await client.auth.updateUser(
-            UserAttributes(
-              data: {
-                'phone_verified': true,
-                'phone': phone,
-              },
-            ),
+            UserAttributes(data: {'phone_verified': true, 'phone': phone}),
           );
           try {
-            await client.from('users').update({
-              'phone': phone,
-              'updated_at': DateTime.now().toIso8601String(),
-            }).eq('id', user.id);
+            await client
+                .from('users')
+                .update({
+                  'phone': phone,
+                  'updated_at': DateTime.now().toIso8601String(),
+                })
+                .eq('id', user.id);
           } catch (_) {}
           return AuthResponse(session: currentSession, user: currentUser);
         } else {
-          throw const AuthException('Invalid OTP. Use 123456 to bypass Sandbox restrictions.');
+          throw const AuthException(
+            'Invalid OTP. Use 123456 to bypass Sandbox restrictions.',
+          );
         }
       }
     } else {
@@ -554,7 +638,10 @@ class SupabaseService {
               try {
                 await createProfile(
                   id: user.id,
-                  fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+                  fullName:
+                      user.userMetadata?['full_name'] ??
+                      pendingSignUpName ??
+                      'User',
                   phone: phone,
                 );
               } catch (_) {}
@@ -585,7 +672,9 @@ class SupabaseService {
             return response;
           }
         } else {
-          throw const AuthException('Invalid OTP. Use 123456 to bypass Sandbox restrictions.');
+          throw const AuthException(
+            'Invalid OTP. Use 123456 to bypass Sandbox restrictions.',
+          );
         }
       }
     }
@@ -616,20 +705,26 @@ class SupabaseService {
           email: email,
           password: password,
         );
-        
+
         final user = response.user;
         if (user != null) {
           try {
             await createProfile(
               id: user.id,
-              fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
-                  email: user.email ?? email,
+              fullName:
+                  user.userMetadata?['full_name'] ??
+                  pendingSignUpName ??
+                  'User',
+              email: user.email ?? email,
               phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
             );
-            await client.from('users').update({
-              'email_verified': true,
-              'updated_at': DateTime.now().toIso8601String(),
-            }).eq('id', user.id);
+            await client
+                .from('users')
+                .update({
+                  'email_verified': true,
+                  'updated_at': DateTime.now().toIso8601String(),
+                })
+                .eq('id', user.id);
           } catch (_) {}
         }
         return response;
@@ -648,14 +743,20 @@ class SupabaseService {
             try {
               await createProfile(
                 id: user.id,
-                fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+                fullName:
+                    user.userMetadata?['full_name'] ??
+                    pendingSignUpName ??
+                    'User',
                 email: user.email ?? email,
                 phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
               );
-              await client.from('users').update({
-                'email_verified': true,
-                'updated_at': DateTime.now().toIso8601String(),
-              }).eq('id', user.id);
+              await client
+                  .from('users')
+                  .update({
+                    'email_verified': true,
+                    'updated_at': DateTime.now().toIso8601String(),
+                  })
+                  .eq('id', user.id);
             } catch (_) {}
           }
           return response;
@@ -675,14 +776,20 @@ class SupabaseService {
             try {
               await createProfile(
                 id: user.id,
-                fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+                fullName:
+                    user.userMetadata?['full_name'] ??
+                    pendingSignUpName ??
+                    'User',
                 email: email,
                 phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
               );
-              await client.from('users').update({
-                'email_verified': true,
-                'updated_at': DateTime.now().toIso8601String(),
-              }).eq('id', user.id);
+              await client
+                  .from('users')
+                  .update({
+                    'email_verified': true,
+                    'updated_at': DateTime.now().toIso8601String(),
+                  })
+                  .eq('id', user.id);
             } catch (_) {}
           }
           return response;
@@ -694,20 +801,24 @@ class SupabaseService {
         token: token,
         type: OtpType.signup,
       );
-      
+
       final user = response.user;
       if (user != null) {
         try {
           await createProfile(
             id: user.id,
-            fullName: user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
+            fullName:
+                user.userMetadata?['full_name'] ?? pendingSignUpName ?? 'User',
             email: user.email ?? email,
             phone: user.userMetadata?['phone'] ?? pendingSignUpPhone,
           );
-          await client.from('users').update({
-            'email_verified': true,
-            'updated_at': DateTime.now().toIso8601String(),
-          }).eq('id', user.id);
+          await client
+              .from('users')
+              .update({
+                'email_verified': true,
+                'updated_at': DateTime.now().toIso8601String(),
+              })
+              .eq('id', user.id);
         } catch (_) {}
       }
       return response;
@@ -716,18 +827,12 @@ class SupabaseService {
 
   /// Resend the email OTP for sign-up verification.
   static Future<void> resendEmailOtp({required String email}) async {
-    await client.auth.resend(
-      type: OtpType.signup,
-      email: email,
-    );
+    await client.auth.resend(type: OtpType.signup, email: email);
   }
 
   /// Resend the email OTP for sign-in.
   static Future<void> resendSignInEmailOtp({required String email}) async {
-    await client.auth.resend(
-      type: OtpType.email,
-      email: email,
-    );
+    await client.auth.resend(type: OtpType.email, email: email);
   }
 
   /// Sign out the current authenticated user session.
@@ -749,10 +854,13 @@ class SupabaseService {
   }) async {
     try {
       final bytes = utf8.encode(jsonEncode(profileData));
-      
+
       // Attempt to automatically create the 'profiles' storage bucket if it doesn't exist.
       try {
-        await client.storage.createBucket('profiles', const BucketOptions(public: true));
+        await client.storage.createBucket(
+          'profiles',
+          const BucketOptions(public: true),
+        );
       } catch (e) {
         // Ignore error if bucket already exists or if we lack permissions to create programmatically.
         // ignore: avoid_print
@@ -815,28 +923,37 @@ class SupabaseService {
         var hubsList = await client.from('hubs').select('id, name');
         if (hubsList.isEmpty) {
           try {
-            final newHub = await client.from('hubs').insert({
-              'name': 'Default Testing Hub',
-              'address': 'Default Address',
-            }).select('id, name').single();
+            final newHub = await client
+                .from('hubs')
+                .insert({
+                  'name': 'Default Testing Hub',
+                  'address': 'Default Address',
+                })
+                .select('id, name')
+                .single();
             hubsList = [newHub];
           } catch (e) {
             // ignore: avoid_print
-            print('Warning: Failed to create default hub in saveUserProfile: $e');
+            print(
+              'Warning: Failed to create default hub in saveUserProfile: $e',
+            );
           }
         }
         if (hubsList.isNotEmpty) {
-          final addressText = '${address['street']} ${address['city']}'.toLowerCase();
-          final matchingHub = hubsList.firstWhere(
-            (h) {
-              final hubName = (h['name'] as String).split(' ').first.toLowerCase();
-              if (hubName == 'brahmapur' && (addressText.contains('berhampur') || addressText.contains('brahmapur'))) {
-                return true;
-              }
-              return addressText.contains(hubName);
-            },
-            orElse: () => hubsList.first,
-          );
+          final addressText = '${address['street']} ${address['city']}'
+              .toLowerCase();
+          final matchingHub = hubsList.firstWhere((h) {
+            final hubName = (h['name'] as String)
+                .split(' ')
+                .first
+                .toLowerCase();
+            if (hubName == 'brahmapur' &&
+                (addressText.contains('berhampur') ||
+                    addressText.contains('brahmapur'))) {
+              return true;
+            }
+            return addressText.contains(hubName);
+          }, orElse: () => hubsList.first);
           hubId = matchingHub['id'] as String?;
         }
       } catch (e) {
@@ -877,45 +994,78 @@ class SupabaseService {
     bool? withinCoverage,
   }) async {
     try {
-      // 1. Resolve Nearest Hub ID from address
-      String? hubId;
-      // Whether the address actually falls within a hub's coverage zone.
-      // Prefer an explicit geo-based result from the caller; otherwise fall
-      // back to a name-based match against the available hubs.
-      bool matchedHub = false;
-      try {
-        final hubsList = await client.from('hubs').select('id, name');
-        if (hubsList.isNotEmpty) {
-          final addressText = '${address['street']} ${address['city']}'.toLowerCase();
-          Map<String, dynamic>? matchingHub;
-          for (final h in hubsList) {
-            final hubName = (h['name'] as String).split(' ').first.toLowerCase();
-            final isMatch =
-                (hubName == 'brahmapur' &&
-                    (addressText.contains('berhampur') ||
-                        addressText.contains('brahmapur'))) ||
-                addressText.contains(hubName);
-            if (isMatch) {
-              matchingHub = Map<String, dynamic>.from(h);
-              break;
-            }
-          }
-          if (matchingHub != null) {
-            hubId = matchingHub['id'] as String?;
-            matchedHub = true;
-          } else {
-            // No coverage: keep a hub reference for downstream fallbacks but
-            // mark the zone as unverified.
-            hubId = hubsList.first['id'] as String?;
-            matchedHub = false;
-          }
-        }
-      } catch (e) {
-        // ignore: avoid_print
-        print('Warning: Failed to resolve hub: $e');
-      }
+      final lat = double.tryParse(
+        address['latitude']?.toString() ?? address['lat']?.toString() ?? '',
+      );
+      final lng = double.tryParse(
+        address['longitude']?.toString() ?? address['lng']?.toString() ?? '',
+      );
 
-      final bool zoneVerified = withinCoverage ?? matchedHub;
+      String? hubId;
+      bool zoneVerified = withinCoverage ?? false;
+
+      // Prefer server authority when coordinates exist
+      if (lat != null && lng != null) {
+        final resolved = await resolveHubCoverage(lat, lng);
+        if (resolved != null) {
+          hubId = resolved['hub_id']?.toString();
+          zoneVerified = resolved['zone_verified'] == true;
+        } else {
+          // Client fallback until SQL migration is applied
+          zoneVerified =
+              withinCoverage ?? await isPointWithinCoverage(lat, lng);
+          try {
+            final hubsList = await client
+                .from('hubs')
+                .select('id, latitude, longitude');
+            double best = double.infinity;
+            for (final h in hubsList) {
+              final hubLat = double.tryParse(h['latitude']?.toString() ?? '');
+              final hubLng = double.tryParse(h['longitude']?.toString() ?? '');
+              if (hubLat == null || hubLng == null) continue;
+              if (hubLat == 0.0 && hubLng == 0.0) continue;
+              final d = _haversineKm(lat, lng, hubLat, hubLng);
+              if (d < best) {
+                best = d;
+                hubId = h['id']?.toString();
+              }
+            }
+            if (best != double.infinity) {
+              zoneVerified = best <= coverageRadiusKm;
+            }
+          } catch (_) {}
+        }
+      } else {
+        // No coordinates: never mark as verified from the client alone
+        zoneVerified = false;
+        try {
+          final hubsList = await client.from('hubs').select('id, name');
+          if (hubsList.isNotEmpty) {
+            final addressText = '${address['street']} ${address['city']}'
+                .toLowerCase();
+            Map<String, dynamic>? matchingHub;
+            for (final h in hubsList) {
+              final hubName = (h['name'] as String)
+                  .split(' ')
+                  .first
+                  .toLowerCase();
+              final isMatch =
+                  (hubName == 'brahmapur' &&
+                      (addressText.contains('berhampur') ||
+                          addressText.contains('brahmapur'))) ||
+                  addressText.contains(hubName);
+              if (isMatch) {
+                matchingHub = Map<String, dynamic>.from(h);
+                break;
+              }
+            }
+            hubId = (matchingHub ?? hubsList.first)['id'] as String?;
+          }
+        } catch (e) {
+          // ignore: avoid_print
+          print('Warning: Failed to resolve hub: $e');
+        }
+      }
 
       // Set all existing addresses to non-primary first
       try {
@@ -925,8 +1075,8 @@ class SupabaseService {
             .eq('user_id', id);
       } catch (_) {}
 
-      // 2. Upsert address record
-      await client.from('addresses').upsert({
+      // 2. Upsert address record (trigger recomputes hub/zone when lat/lng set)
+      final addressRow = <String, dynamic>{
         'user_id': id,
         'hub_id': hubId,
         'flat': address['flat'] ?? '',
@@ -935,7 +1085,11 @@ class SupabaseService {
         'pin_code': address['pincode'] ?? '',
         'is_primary': true,
         'zone_verified': zoneVerified,
-      });
+      };
+      if (lat != null) addressRow['latitude'] = lat;
+      if (lng != null) addressRow['longitude'] = lng;
+
+      await client.from('addresses').upsert(addressRow);
 
       // 3. Update legacy profile JSON by downloading, updating address, and re-uploading
       try {
@@ -945,6 +1099,9 @@ class SupabaseService {
           'street': address['street'] ?? '',
           'city': address['city'] ?? '',
           'pincode': address['pincode'] ?? '',
+          'latitude': ?lat,
+          'longitude': ?lng,
+          'zone_verified': zoneVerified,
         };
         profileData['updated_at'] = DateTime.now().toIso8601String();
         await uploadProfileJson(id: id, profileData: profileData);
@@ -972,7 +1129,9 @@ class SupabaseService {
 
       final addressResponse = await client
           .from('addresses')
-          .select('flat, street, city, pin_code, zone_verified')
+          .select(
+            'flat, street, city, pin_code, zone_verified, latitude, longitude, hub_id',
+          )
           .eq('user_id', userId)
           .eq('is_primary', true)
           .limit(1)
@@ -995,7 +1154,10 @@ class SupabaseService {
           'street': addressResponse['street'],
           'city': addressResponse['city'],
           'pincode': addressResponse['pin_code'],
-          'zone_verified': addressResponse['zone_verified'] ?? true,
+          'zone_verified': addressResponse['zone_verified'] == true,
+          'latitude': addressResponse['latitude'],
+          'longitude': addressResponse['longitude'],
+          'hub_id': addressResponse['hub_id'],
         };
       }
 
@@ -1015,48 +1177,86 @@ class SupabaseService {
   }
 
   /// Create a new booking transaction record in the database tables
-  static Future<void> createBooking({
+  static Future<String> createBooking({
     required String userId,
     required String serviceTitle,
     required DateTime selectedDate,
     required String selectedTime,
     required String selectedDuration,
-    required String selectedProfessionalName,
+    String selectedProfessionalName = '',
     required String repeatOption,
     required String endsAfter,
     required bool preferSameProfessional,
     required int totalAmount,
     String? paymentId,
     String? careNotes,
+
+    /// When false (default), professional assignment is deferred to the
+    /// server-side T-45 job. Pass true only for legacy / instant flows.
+    bool assignProfessionalNow = false,
+    int donationAmount = 0,
+    int? serviceSubtotal,
+    double? gstAmount,
   }) async {
     // 1. Fetch primary address for the user
     final addressRes = await client
         .from('addresses')
-        .select('id, hub_id')
+        .select('id, hub_id, zone_verified, latitude, longitude')
         .eq('user_id', userId)
         .eq('is_primary', true)
         .limit(1)
         .maybeSingle();
 
-    final backupAddressRes = addressRes ??
+    final backupAddressRes =
+        addressRes ??
         await client
             .from('addresses')
-            .select('id, hub_id')
+            .select('id, hub_id, zone_verified, latitude, longitude')
             .eq('user_id', userId)
             .limit(1)
             .maybeSingle();
 
     final addressId = backupAddressRes?['id'] as String?;
     final hubId = backupAddressRes?['hub_id'] as String?;
+    final zoneVerified = backupAddressRes?['zone_verified'] == true;
+    final addrLat = double.tryParse(
+      backupAddressRes?['latitude']?.toString() ?? '',
+    );
+    final addrLng = double.tryParse(
+      backupAddressRes?['longitude']?.toString() ?? '',
+    );
 
     if (addressId == null) {
-      throw Exception('No address found for user. Please set an address first.');
+      throw Exception(
+        'No address found for user. Please set an address first.',
+      );
+    }
+
+    // Server-aligned coverage gate (UX already blocks, this is authority)
+    bool coverageOk = zoneVerified;
+    if (!coverageOk && addrLat != null && addrLng != null) {
+      final resolved = await resolveHubCoverage(addrLat, addrLng);
+      coverageOk = resolved?['zone_verified'] == true;
+    }
+    if (!coverageOk) {
+      throw Exception(
+        'This address is outside our ${coverageRadiusKm.toStringAsFixed(0)} km '
+        'service area. Please choose a location closer to a Hestia hub.',
+      );
     }
 
     String finalHubId = hubId ?? '';
+    if (finalHubId.isEmpty && addrLat != null && addrLng != null) {
+      final resolved = await resolveHubCoverage(addrLat, addrLng);
+      finalHubId = resolved?['hub_id']?.toString() ?? '';
+    }
     if (finalHubId.isEmpty) {
       try {
-        final hubRes = await client.from('hubs').select('id').limit(1).maybeSingle();
+        final hubRes = await client
+            .from('hubs')
+            .select('id')
+            .limit(1)
+            .maybeSingle();
         finalHubId = hubRes?['id'] as String? ?? '';
       } catch (_) {}
     }
@@ -1064,10 +1264,14 @@ class SupabaseService {
     // Auto-create a default hub if none exists in the database
     if (finalHubId.isEmpty) {
       try {
-        final newHubRes = await client.from('hubs').insert({
-          'name': 'Default Testing Hub',
-          'address': 'Default Address',
-        }).select('id').single();
+        final newHubRes = await client
+            .from('hubs')
+            .insert({
+              'name': 'Default Testing Hub',
+              'address': 'Default Address',
+            })
+            .select('id')
+            .single();
         finalHubId = newHubRes['id'] as String? ?? '';
       } catch (e) {
         // ignore: avoid_print
@@ -1078,7 +1282,11 @@ class SupabaseService {
     // Fallback 1: Resolve hub_id from any professional in the database
     if (finalHubId.isEmpty) {
       try {
-        final anyProf = await client.from('professionals').select('hub_id').limit(1).maybeSingle();
+        final anyProf = await client
+            .from('professionals')
+            .select('hub_id')
+            .limit(1)
+            .maybeSingle();
         finalHubId = anyProf?['hub_id'] as String? ?? '';
       } catch (_) {}
     }
@@ -1101,45 +1309,50 @@ class SupabaseService {
       finalHubId = '00000000-0000-0000-0000-000000000000';
     }
 
-    // 2. Resolve professional ID
+    // 2. Resolve professional ID only when assigning immediately
     String? professionalId;
-    if (selectedProfessionalName.isNotEmpty) {
-      try {
-        final profRes = await client
-            .from('professionals')
-            .select('id')
-            .eq('full_name', selectedProfessionalName)
-            .limit(1)
-            .maybeSingle();
-        professionalId = profRes?['id'] as String?;
-      } catch (e) {
-        // ignore
+    if (assignProfessionalNow) {
+      if (selectedProfessionalName.isNotEmpty) {
+        try {
+          final profRes = await client
+              .from('professionals')
+              .select('id')
+              .eq('full_name', selectedProfessionalName)
+              .limit(1)
+              .maybeSingle();
+          professionalId = profRes?['id'] as String?;
+        } catch (e) {
+          // ignore
+        }
       }
-    }
 
-    if (professionalId == null) {
-      try {
-        var query = client.from('professionals').select('id');
-        if (finalHubId.isNotEmpty) {
-          query = query.eq('hub_id', finalHubId);
+      if (professionalId == null) {
+        try {
+          var query = client.from('professionals').select('id');
+          if (finalHubId.isNotEmpty) {
+            query = query.eq('hub_id', finalHubId);
+          }
+          final profs = await query;
+          if (profs.isNotEmpty) {
+            professionalId = profs.first['id'] as String?;
+          }
+        } catch (e) {
+          // ignore
         }
-        final profs = await query;
-        if (profs.isNotEmpty) {
-          professionalId = profs.first['id'] as String?;
-        }
-      } catch (e) {
-        // ignore
       }
-    }
 
-    if (professionalId == null) {
-      try {
-        final profs = await client.from('professionals').select('id').limit(1);
-        if (profs.isNotEmpty) {
-          professionalId = profs.first['id'] as String?;
+      if (professionalId == null) {
+        try {
+          final profs = await client
+              .from('professionals')
+              .select('id')
+              .limit(1);
+          if (profs.isNotEmpty) {
+            professionalId = profs.first['id'] as String?;
+          }
+        } catch (e) {
+          // ignore
         }
-      } catch (e) {
-        // ignore
       }
     }
 
@@ -1157,17 +1370,28 @@ class SupabaseService {
     final isRecurring = repeatOption != 'Once' && repeatOption != 'One-time';
     String? recurrenceId;
     if (isRecurring) {
-      final freq = (repeatOption.toLowerCase() == 'daily' || repeatOption.toLowerCase() == 'everyday') ? 'daily' : 'weekly';
+      final freq =
+          (repeatOption.toLowerCase() == 'daily' ||
+              repeatOption.toLowerCase() == 'everyday')
+          ? 'daily'
+          : 'weekly';
       List<int> days = [selectedDate.weekday];
-      final endDate = selectedDate.add(const Duration(days: 90)).toIso8601String().substring(0, 10);
+      final endDate = selectedDate
+          .add(const Duration(days: 90))
+          .toIso8601String()
+          .substring(0, 10);
 
-      final recResponse = await client.from('recurrence_schedules').insert({
-        'user_id': userId,
-        'frequency': freq,
-        'days_of_week': days,
-        'end_date': endDate,
-        'prefer_same_professional': preferSameProfessional,
-      }).select('id').single();
+      final recResponse = await client
+          .from('recurrence_schedules')
+          .insert({
+            'user_id': userId,
+            'frequency': freq,
+            'days_of_week': days,
+            'end_date': endDate,
+            'prefer_same_professional': preferSameProfessional,
+          })
+          .select('id')
+          .single();
 
       recurrenceId = recResponse['id'] as String?;
     }
@@ -1177,20 +1401,26 @@ class SupabaseService {
       try {
         await client.from('caregivers').upsert({
           'id': professionalId,
-          'full_name': selectedProfessionalName,
+          'full_name': selectedProfessionalName.isNotEmpty
+              ? selectedProfessionalName
+              : 'Professional',
         });
       } catch (e) {
         // ignore or log
       }
     }
 
-    // 6. Insert booking
+    // 6. Insert booking — professional deferred to T-45 server job by default
     final servicePillar = mapReasonToServicePillar(serviceTitle);
 
     final metadata = {
       'user_id': userId,
       'address_id': addressId,
       'total_amount': totalAmount,
+      'service_subtotal': serviceSubtotal ?? (totalAmount - donationAmount),
+      'gst_amount': gstAmount ?? 0,
+      'donation_amount': donationAmount,
+      'donate_to_ngo': donationAmount > 0,
       'is_recurring': isRecurring,
       'recurrence_id': recurrenceId,
       'service_pillar': servicePillar,
@@ -1199,10 +1429,15 @@ class SupabaseService {
       'ends_after': endsAfter,
       'payment_id': paymentId,
       'care_notes': careNotes,
+      'assignment_deferred': !assignProfessionalNow,
     };
 
-    final bookingRes = await client.from('bookings').insert({
-      'hub_id': (finalHubId.isEmpty || finalHubId == '00000000-0000-0000-0000-000000000000') ? null : finalHubId,
+    final bookingInsert = <String, dynamic>{
+      'hub_id':
+          (finalHubId.isEmpty ||
+              finalHubId == '00000000-0000-0000-0000-000000000000')
+          ? null
+          : finalHubId,
       'professional_id': professionalId,
       'service_type': serviceTitle,
       'status': 'confirmed',
@@ -1211,19 +1446,37 @@ class SupabaseService {
       'duration_hours': durationHours,
       'user_id': userId,
       'notes': jsonEncode(metadata),
-    }).select('id').single();
+      'assignment_status': professionalId != null ? 'assigned' : 'pending',
+    };
+    if (professionalId != null) {
+      bookingInsert['assigned_at'] = DateTime.now().toIso8601String();
+    }
+
+    final bookingRes = await client
+        .from('bookings')
+        .insert(bookingInsert)
+        .select('id')
+        .single();
 
     final bookingId = bookingRes['id'] as String;
 
-    // 7. Insert active session if professional assigned
+    // 7. Insert active session only when a professional was assigned now
     if (professionalId != null) {
       try {
-        final sessionRes = await client.from('sessions').insert({
-          'booking_id': bookingId,
-          'professional_id': professionalId,
-          'hub_id': (finalHubId.isEmpty || finalHubId == '00000000-0000-0000-0000-000000000000') ? null : finalHubId,
-          'status': 'transit',
-        }).select('id').single();
+        final sessionRes = await client
+            .from('sessions')
+            .insert({
+              'booking_id': bookingId,
+              'professional_id': professionalId,
+              'hub_id':
+                  (finalHubId.isEmpty ||
+                      finalHubId == '00000000-0000-0000-0000-000000000000')
+                  ? null
+                  : finalHubId,
+              'status': 'transit',
+            })
+            .select('id')
+            .single();
 
         final sessionId = sessionRes['id'] as String;
 
@@ -1233,7 +1486,9 @@ class SupabaseService {
           'user_id': userId,
           'amount': totalAmount,
           'status': 'pending',
-          'payment_method': paymentId == null || paymentId.isEmpty ? 'unpaid' : 'online',
+          'payment_method': paymentId == null || paymentId.isEmpty
+              ? 'unpaid'
+              : 'online',
         });
 
         // Insert dummy locations for tracking
@@ -1243,7 +1498,7 @@ class SupabaseService {
             'professional_id': professionalId,
             'coordinates': {
               'type': 'Point',
-              'coordinates': [77.6412, 12.9275]
+              'coordinates': [77.6412, 12.9275],
             },
             'recorded_at': DateTime.now().toIso8601String(),
           },
@@ -1252,10 +1507,12 @@ class SupabaseService {
             'professional_id': professionalId,
             'coordinates': {
               'type': 'Point',
-              'coordinates': [77.6400, 12.9300]
+              'coordinates': [77.6400, 12.9300],
             },
-            'recorded_at': DateTime.now().subtract(const Duration(minutes: 5)).toIso8601String(),
-          }
+            'recorded_at': DateTime.now()
+                .subtract(const Duration(minutes: 5))
+                .toIso8601String(),
+          },
         ]);
 
         // Insert dummy activity logs
@@ -1265,118 +1522,248 @@ class SupabaseService {
             'professional_id': professionalId,
             'activity_type': 'Feeding support',
             'note': 'Breastfeeding positioning assisted, mother resting',
-            'logged_at': DateTime.now().subtract(const Duration(minutes: 20)).toIso8601String(),
+            'logged_at': DateTime.now()
+                .subtract(const Duration(minutes: 20))
+                .toIso8601String(),
           },
           {
             'session_id': sessionId,
             'professional_id': professionalId,
             'activity_type': 'Meal assistance',
             'note': 'Light breakfast prepared for mother',
-            'logged_at': DateTime.now().subtract(const Duration(minutes: 40)).toIso8601String(),
+            'logged_at': DateTime.now()
+                .subtract(const Duration(minutes: 40))
+                .toIso8601String(),
           },
           {
             'session_id': sessionId,
             'professional_id': professionalId,
             'activity_type': 'Session start',
             'note': 'Session started. Checked on patient, settled well',
-            'logged_at': DateTime.now().subtract(const Duration(minutes: 60)).toIso8601String(),
+            'logged_at': DateTime.now()
+                .subtract(const Duration(minutes: 60))
+                .toIso8601String(),
           },
         ]);
       } catch (e) {
         // ignore: avoid_print
         print('Warning: Failed to insert dummy session/tracking data: $e');
       }
+    } else {
+      // Deferred assignment: still record a pending invoice against the booking
+      // via metadata; session is created by the T-45 assign job.
+      try {
+        // no-op placeholder — invoice created when session is opened at assign time
+      } catch (_) {}
     }
+
+    return bookingId;
   }
 
-  /// Retrieve the active booking details for the dashboard
+  /// Debug helper: force-run T-45 assign-professionals for one booking now
+  /// (skips the 45-minute window when the edge function receives force=true).
+  static Future<Map<String, dynamic>> invokeAssignProfessionalsDebug({
+    required String bookingId,
+  }) async {
+    final response = await client.functions.invoke(
+      'assign-professionals',
+      body: {'booking_id': bookingId, 'force': true},
+    );
+
+    final data = response.data;
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return {
+      'ok': response.status == 200,
+      'raw': data,
+      'status': response.status,
+    };
+  }
+
+  /// Upsert an FCM device token for the signed-in user.
+  static Future<void> upsertDeviceToken({
+    required String userId,
+    required String token,
+    String platform = 'android',
+  }) async {
+    if (token.trim().isEmpty) return;
+    await client.from('device_tokens').upsert({
+      'user_id': userId,
+      'token': token,
+      'platform': platform,
+      'updated_at': DateTime.now().toIso8601String(),
+    }, onConflict: 'user_id,token');
+  }
+
+  /// Remove a device token (e.g. on logout).
+  static Future<void> deleteDeviceToken({
+    required String userId,
+    required String token,
+  }) async {
+    if (token.trim().isEmpty) return;
+    await client
+        .from('device_tokens')
+        .delete()
+        .eq('user_id', userId)
+        .eq('token', token);
+  }
+
+  /// Retrieve the active booking details for the dashboard.
+  /// Auto-marks no-show when the booked window ended without arrival, and
+  /// keeps an unrated no-show visible so the home banner can open review.
   static Future<Map<String, dynamic>?> getActiveBooking(String userId) async {
     try {
       final responseList = await client
           .from('bookings')
-          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions), hubs(name, address)')
+          .select(
+            'id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, assignment_status, professionals(full_name, avg_rating, total_sessions), hubs(name, address)',
+          )
           .eq('user_id', userId)
-          .inFilter('status', ['pending', 'confirmed', 'active', 'in_progress']);
+          .inFilter('status', [
+            'pending',
+            'confirmed',
+            'departed',
+            'active',
+            'in_progress',
+            'no_show',
+          ]);
 
-      final eligible = <Map<String, dynamic>>[];
-      for (var row in responseList) {
+      final now = DateTime.now();
+      Map<String, dynamic>? liveBooking;
+      Map<String, dynamic>? noShowForReview;
+      DateTime? liveStart;
+      DateTime? noShowStart;
+
+      for (final row in responseList) {
         final notesStr = row['notes'] as String?;
         if (notesStr == null) continue;
+        Map<String, dynamic> metadata;
         try {
-          final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
-          final status = row['status'] as String? ?? 'pending';
-          if (metadata['user_id'] == userId &&
-              ['pending', 'confirmed', 'active', 'in_progress'].contains(status)) {
-            eligible.add(row);
-          }
-        } catch (_) {}
-      }
-
-      if (eligible.isEmpty) return null;
-
-      eligible.sort((a, b) {
-        final dateA = a['scheduled_date']?.toString() ?? '';
-        final dateB = b['scheduled_date']?.toString() ?? '';
-        return dateA.compareTo(dateB);
-      });
-
-      final response = eligible.first;
-      final bookingId = response['id'] as String;
-      final serviceType = response['service_type'] as String? ?? 'Care';
-      
-      DateTime scheduledStart = DateTime.now();
-      try {
-        final dateStr = response['scheduled_date']?.toString() ?? '';
-        final timeStr = response['scheduled_time']?.toString() ?? '';
-        if (dateStr.isNotEmpty) {
-          if (timeStr.isNotEmpty) {
-            scheduledStart = DateTime.parse('${dateStr}T$timeStr');
-          } else {
-            scheduledStart = DateTime.parse(dateStr);
-          }
+          metadata = jsonDecode(notesStr) as Map<String, dynamic>;
+        } catch (_) {
+          continue;
         }
-      } catch (_) {}
+        if (metadata['user_id'] != null && metadata['user_id'] != userId) {
+          continue;
+        }
 
-      final notesStr = response['notes'] as String?;
-      int totalAmount = 0;
-      String? careNotes;
-      if (notesStr != null) {
+        final bookingId = row['id'] as String;
+        final bookingStatus = (row['status'] as String? ?? 'pending')
+            .toLowerCase();
+        final scheduledStart =
+            parseScheduledStartLocal(
+              row['scheduled_date'],
+              row['scheduled_time'],
+            ) ??
+            now;
+        final hours = _durationHoursFromBooking(row);
+        final scheduledEnd = scheduledStart.add(
+          Duration(minutes: (hours * 60).round()),
+        );
+
+        String sessionStatus = bookingStatus;
+        String? sessionId;
+        DateTime? actualStart;
+        DateTime? actualEnd;
+        String? arrivalCode;
         try {
-          final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
-          totalAmount = metadata['total_amount'] as int? ?? 0;
-          careNotes = metadata['care_notes'] as String?;
+          final sessionRes = await client
+              .from('sessions')
+              .select('id, status, start_time, end_time, arrival_code')
+              .eq('booking_id', bookingId)
+              .limit(1)
+              .maybeSingle();
+          if (sessionRes != null) {
+            sessionStatus = (sessionRes['status'] as String? ?? sessionStatus)
+                .toLowerCase();
+            sessionId = sessionRes['id'] as String?;
+            arrivalCode = sessionRes['arrival_code']?.toString();
+            final startTimeStr = sessionRes['start_time'] as String?;
+            final endTimeStr = sessionRes['end_time'] as String?;
+            if (startTimeStr != null) {
+              actualStart = DateTime.parse(startTimeStr);
+            }
+            if (endTimeStr != null) {
+              actualEnd = DateTime.parse(endTimeStr);
+            }
+          }
         } catch (_) {}
-      }
 
-      final status = response['status'] as String? ?? 'pending';
-      
-      String caregiverName = 'Professional';
-      double professionalRating = 0.0;
-      int professionalTotalSessions = 0;
-      if (response['professionals'] != null) {
-        final professional = response['professionals'] as Map<String, dynamic>;
-        caregiverName = professional['full_name'] as String? ?? caregiverName;
-        professionalRating =
-            double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
-        professionalTotalSessions =
-            int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
-      }
+        const inTransit = {'departed', 'transit', 'en_route'};
+        const arrivedOrLive = {'arrived', 'started', 'active', 'in_progress'};
+        const terminal = {'completed', 'cancelled', 'no_show', 'unattended'};
 
-      String hubName = '';
-      String hubAddress = '';
-      if (response['hubs'] != null) {
-        final hubMap = response['hubs'] as Map<String, dynamic>;
-        hubName = hubMap['name'] as String? ?? '';
-        hubAddress = hubMap['address'] as String? ?? '';
-      }
+        // Slot ended and pro never arrived → auto no-show.
+        var effectiveStatus = bookingStatus;
+        if (!terminal.contains(bookingStatus) &&
+            !arrivedOrLive.contains(sessionStatus) &&
+            !inTransit.contains(sessionStatus) &&
+            !now.isBefore(scheduledEnd)) {
+          try {
+            await markNoShow(bookingId)
+                .timeout(const Duration(seconds: 5));
+          } catch (_) {}
+          effectiveStatus = 'no_show';
+          sessionStatus = 'no_show';
+        } else if (terminal.contains(bookingStatus)) {
+          effectiveStatus = bookingStatus;
+        } else if (sessionStatus == 'no_show' ||
+            sessionStatus == 'unattended') {
+          effectiveStatus = 'no_show';
+        } else if (inTransit.contains(sessionStatus) ||
+            arrivedOrLive.contains(sessionStatus)) {
+          // Prefer live session status (e.g. departed) over booking.confirmed.
+          effectiveStatus = sessionStatus;
+        } else if (inTransit.contains(bookingStatus) ||
+            arrivedOrLive.contains(bookingStatus)) {
+          effectiveStatus = bookingStatus;
+        }
 
-      String userAddress = '';
-      if (notesStr != null) {
+        bool isRated = false;
+        if (sessionId != null && effectiveStatus == 'no_show') {
+          try {
+            final feedbackRes = await client
+                .from('session_feedback')
+                .select('id')
+                .eq('session_id', sessionId)
+                .eq('user_id', userId)
+                .limit(1)
+                .maybeSingle();
+            isRated = feedbackRes != null;
+          } catch (_) {}
+        }
+
+        String caregiverName = 'Professional';
+        double professionalRating = 0.0;
+        int professionalTotalSessions = 0;
+        if (row['professionals'] != null) {
+          final professional = row['professionals'] as Map<String, dynamic>;
+          caregiverName = professional['full_name'] as String? ?? caregiverName;
+          professionalRating =
+              double.tryParse(professional['avg_rating']?.toString() ?? '') ??
+              0.0;
+          professionalTotalSessions =
+              int.tryParse(professional['total_sessions']?.toString() ?? '') ??
+              0;
+        }
+
+        String hubName = '';
+        String hubAddress = '';
+        if (row['hubs'] != null) {
+          final hubMap = row['hubs'] as Map<String, dynamic>;
+          hubName = hubMap['name'] as String? ?? '';
+          hubAddress = hubMap['address'] as String? ?? '';
+        }
+
+        String userAddress = '';
         try {
-          final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
           final addressId = metadata['address_id'] as String?;
           if (addressId != null) {
-            final addrRes = await client.from('addresses').select('flat, street, city, pin_code').eq('id', addressId).maybeSingle();
+            final addrRes = await client
+                .from('addresses')
+                .select('flat, street, city, pin_code')
+                .eq('id', addressId)
+                .maybeSingle();
             if (addrRes != null) {
               final flat = addrRes['flat'] ?? '';
               final street = addrRes['street'] ?? '';
@@ -1386,57 +1773,61 @@ class SupabaseService {
             }
           }
         } catch (_) {}
+
+        final mapped = <String, dynamic>{
+          'booking_id': bookingId,
+          'session_id': sessionId,
+          'professional_id': row['professional_id']?.toString(),
+          'assignment_status':
+              row['assignment_status']?.toString() ?? 'pending',
+          'title': row['service_type'] as String? ?? 'Care',
+          'scheduled_start': scheduledStart,
+          'actual_start': actualStart,
+          'actual_end': actualEnd,
+          'amount': (metadata['total_amount'] as num?)?.toInt() ?? 0,
+          'donation_amount':
+              (metadata['donation_amount'] as num?)?.toInt() ?? 0,
+          'service_subtotal':
+              (metadata['service_subtotal'] as num?)?.toInt() ?? 0,
+          'gst_amount': (metadata['gst_amount'] as num?)?.toDouble() ?? 0,
+          'tip_amount': (metadata['tip_amount'] as num?)?.toInt() ?? 0,
+          'status': effectiveStatus,
+          'caregiver_name': caregiverName,
+          'professional_rating': professionalRating,
+          'professional_total_sessions': professionalTotalSessions,
+          'hub_name': hubName,
+          'hub_address': hubAddress,
+          'user_address': userAddress,
+          'arrival_requested': sessionStatus == 'arrived',
+          'arrival_code': arrivalCode,
+          'care_notes': metadata['care_notes'],
+          'duration_hours': hours,
+          'isRated': isRated,
+        };
+
+        if (effectiveStatus == 'no_show') {
+          if (!isRated &&
+              (noShowStart == null || scheduledStart.isAfter(noShowStart))) {
+            noShowForReview = mapped;
+            noShowStart = scheduledStart;
+          }
+          continue;
+        }
+
+        final stillLive =
+            inTransit.contains(sessionStatus) ||
+            arrivedOrLive.contains(sessionStatus) ||
+            inTransit.contains(bookingStatus) ||
+            arrivedOrLive.contains(bookingStatus) ||
+            now.isBefore(scheduledEnd);
+        if (stillLive &&
+            (liveStart == null || scheduledStart.isBefore(liveStart))) {
+          liveBooking = mapped;
+          liveStart = scheduledStart;
+        }
       }
 
-       String activeStatus = status;
-       String? sessionId;
-       DateTime? actualStart;
-       DateTime? actualEnd;
-       String? arrivalCode;
-       try {
-         final sessionRes = await client
-             .from('sessions')
-             .select('id, status, start_time, end_time, arrival_code')
-             .eq('booking_id', bookingId)
-             .limit(1)
-             .maybeSingle();
-         if (sessionRes != null) {
-           activeStatus = sessionRes['status'] as String;
-           sessionId = sessionRes['id'] as String;
-           arrivalCode = sessionRes['arrival_code']?.toString();
-           final startTimeStr = sessionRes['start_time'] as String?;
-           if (startTimeStr != null) {
-             actualStart = DateTime.parse(startTimeStr);
-           }
-           final endTimeStr = sessionRes['end_time'] as String?;
-           if (endTimeStr != null) {
-             actualEnd = DateTime.parse(endTimeStr);
-           }
-         }
-       } catch (e) {
-         // ignore
-       }
-
-       return {
-         'booking_id': bookingId,
-         'session_id': sessionId,
-         'title': serviceType,
-         'scheduled_start': scheduledStart,
-         'actual_start': actualStart,
-         'actual_end': actualEnd,
-         'amount': totalAmount,
-         'status': activeStatus,
-         'caregiver_name': caregiverName,
-         'professional_rating': professionalRating,
-         'professional_total_sessions': professionalTotalSessions,
-         'hub_name': hubName,
-         'hub_address': hubAddress,
-         'user_address': userAddress,
-         'arrival_requested': activeStatus == 'arrived',
-         'arrival_code': arrivalCode,
-         'care_notes': careNotes,
-         'duration_hours': (response['duration_hours'] as num?)?.toDouble() ?? 2.0,
-       };
+      return liveBooking ?? noShowForReview;
     } catch (e) {
       // ignore: avoid_print
       print('Error in getActiveBooking: $e');
@@ -1449,10 +1840,7 @@ class SupabaseService {
     try {
       await client
           .from('sessions')
-          .update({
-            'status': 'arrived',
-            'arrival_code': 'TEST12',
-          })
+          .update({'status': 'arrived', 'arrival_code': 'TEST12'})
           .eq('booking_id', bookingId);
     } catch (e) {
       // ignore: avoid_print
@@ -1491,36 +1879,43 @@ class SupabaseService {
       throw Exception('Invalid verification code');
     }
     final now = DateTime.now().toUtc().toIso8601String();
-    await client.from('sessions').update({
-      'status': 'active',
-      'start_time': now,
-      'client_verified_at': now,
-    }).eq('id', sessionId);
-    
+    await client
+        .from('sessions')
+        .update({
+          'status': 'active',
+          'start_time': now,
+          'client_verified_at': now,
+        })
+        .eq('id', sessionId);
+
     final bookingId = session['booking_id']?.toString();
     if (bookingId != null) {
-      await client.from('bookings').update({'status': 'in_progress'}).eq('id', bookingId);
+      await client
+          .from('bookings')
+          .update({'status': 'in_progress'})
+          .eq('id', bookingId);
     }
   }
 
   /// End the session by client
-  static Future<void> endSessionByClient({
-    required String sessionId,
-  }) async {
+  static Future<void> endSessionByClient({required String sessionId}) async {
     final session = await getSessionById(sessionId);
     if (session == null) throw Exception('Session not found');
-    
+
     final now = DateTime.now().toUtc().toIso8601String();
-    final updatedSession = await client.from('sessions').update({
-      'status': 'completed',
-      'end_time': now,
-    }).eq('id', sessionId).select('id, booking_id').maybeSingle();
+    final updatedSession = await client
+        .from('sessions')
+        .update({'status': 'completed', 'end_time': now})
+        .eq('id', sessionId)
+        .select('id, booking_id')
+        .maybeSingle();
     if (updatedSession == null) {
       throw Exception('Unable to complete session. Please try again.');
     }
-    
+
     final bookingId =
-        updatedSession['booking_id']?.toString() ?? session['booking_id']?.toString();
+        updatedSession['booking_id']?.toString() ??
+        session['booking_id']?.toString();
     if (bookingId != null) {
       final updatedBooking = await client
           .from('bookings')
@@ -1534,53 +1929,202 @@ class SupabaseService {
     }
   }
 
-  static Map<String, double>? _parseProfessionalCoordinates(dynamic rawCoordinates) {
-    if (rawCoordinates is Map<String, dynamic>) {
-      final list = rawCoordinates['coordinates'];
+  /// Cancel an Instant or Scheduled booking from the consumer app.
+  /// Also cancels any linked non-terminal session so staff sees it end.
+  static Future<void> cancelBookingByClient({required String bookingId}) async {
+    if (bookingId.isEmpty) {
+      throw Exception('Missing booking id.');
+    }
+
+    final booking = await client
+        .from('bookings')
+        .select('id, status, notes')
+        .eq('id', bookingId)
+        .maybeSingle();
+    if (booking == null) {
+      throw Exception('Booking not found.');
+    }
+
+    final status = booking['status']?.toString().trim().toLowerCase() ?? '';
+    const terminal = {'cancelled', 'completed', 'no_show', 'unattended'};
+    if (terminal.contains(status)) {
+      throw Exception('This booking can no longer be cancelled.');
+    }
+
+    // Block cancel once care has already started — use End Session instead.
+    final liveSession = await client
+        .from('sessions')
+        .select('id, status')
+        .eq('booking_id', bookingId)
+        .inFilter('status', ['started', 'active', 'in_progress'])
+        .limit(1)
+        .maybeSingle();
+    if (liveSession != null) {
+      throw Exception(
+        'This session has already started. Use End Session instead of Cancel.',
+      );
+    }
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    Map<String, dynamic> notesMeta = {};
+    final notesRaw = booking['notes']?.toString();
+    if (notesRaw != null && notesRaw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(notesRaw);
+        if (decoded is Map) {
+          notesMeta = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    notesMeta['cancelled_at'] = now;
+    notesMeta['cancelled_by'] = 'client';
+
+    final updatedBooking = await client
+        .from('bookings')
+        .update({
+          'status': 'cancelled',
+          'notes': jsonEncode(notesMeta),
+        })
+        .eq('id', bookingId)
+        .select('id')
+        .maybeSingle();
+    if (updatedBooking == null) {
+      throw Exception('Unable to cancel booking. Please try again.');
+    }
+
+    try {
+      await client
+          .from('sessions')
+          .update({
+            'status': 'cancelled',
+            'end_time': now,
+          })
+          .eq('booking_id', bookingId)
+          .not('status', 'in', ['completed', 'cancelled', 'no_show', 'unattended']);
+    } catch (_) {
+      // Booking cancel succeeded; session update is best-effort.
+    }
+  }
+
+  static Map<String, double>? parseProfessionalCoordinatesPublic(
+    dynamic rawCoordinates,
+  ) {
+    return _parseProfessionalCoordinates(rawCoordinates);
+  }
+
+  static Map<String, double>? _parseProfessionalCoordinates(
+    dynamic rawCoordinates,
+  ) {
+    if (rawCoordinates is Map) {
+      final map = Map<String, dynamic>.from(rawCoordinates);
+      final list = map['coordinates'];
       if (list is List && list.length >= 2) {
         final lng = (list[0] as num?)?.toDouble();
         final lat = (list[1] as num?)?.toDouble();
         if (lat != null && lng != null) {
-          return {
-            'latitude': lat,
-            'longitude': lng,
-          };
+          return {'latitude': lat, 'longitude': lng};
         }
+      }
+      final lat = (map['lat'] as num?)?.toDouble() ??
+          (map['latitude'] as num?)?.toDouble();
+      final lng = (map['lng'] as num?)?.toDouble() ??
+          (map['lon'] as num?)?.toDouble() ??
+          (map['longitude'] as num?)?.toDouble();
+      if (lat != null && lng != null) {
+        return {'latitude': lat, 'longitude': lng};
       }
     }
     if (rawCoordinates is List && rawCoordinates.length >= 2) {
       final lng = (rawCoordinates[0] as num?)?.toDouble();
       final lat = (rawCoordinates[1] as num?)?.toDouble();
       if (lat != null && lng != null) {
-        return {
-          'latitude': lat,
-          'longitude': lng,
-        };
+        return {'latitude': lat, 'longitude': lng};
       }
+    }
+    if (rawCoordinates is String) {
+      final text = rawCoordinates.trim();
+      // POINT(lng lat) / SRID=4326;POINT(lng lat)
+      final pointMatch = RegExp(
+        r'POINT\s*\(\s*([-\d.]+)\s+([-\d.]+)\s*\)',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (pointMatch != null) {
+        final lng = double.tryParse(pointMatch.group(1)!);
+        final lat = double.tryParse(pointMatch.group(2)!);
+        if (lat != null && lng != null) {
+          return {'latitude': lat, 'longitude': lng};
+        }
+      }
+      try {
+        final decoded = jsonDecode(text);
+        return _parseProfessionalCoordinates(decoded);
+      } catch (_) {}
     }
     return null;
   }
 
-  /// Retrieve the latest recorded location coordinates for a professional in a session.
-  /// Poll this from the UI every 15 seconds for live tracking.
+  /// Retrieve the latest recorded location for a professional.
+  /// Prefers the SQL RPC (plain lat/lng from PostGIS), then table select fallback.
   static Future<Map<String, double>?> getLatestProfessionalLocation(
-    String sessionId, {
+    String? sessionId, {
     String? professionalId,
   }) async {
     try {
-      var query = client
-          .from('professional_locations')
-          .select('coordinates, professional_id, recorded_at')
-          .eq('session_id', sessionId);
-      if (professionalId != null && professionalId.isNotEmpty) {
-        query = query.eq('professional_id', professionalId);
+      // 1) RPC returns ST_Y/ST_X so Flutter doesn't need to parse geography.
+      try {
+        final rpcResult = await client.rpc(
+          'get_latest_professional_location',
+          params: {
+            'p_session_id':
+                (sessionId != null && sessionId.isNotEmpty) ? sessionId : null,
+            'p_professional_id':
+                (professionalId != null && professionalId.isNotEmpty)
+                    ? professionalId
+                    : null,
+          },
+        );
+        final parsedRpc = _parseLatLngPayload(rpcResult);
+        if (parsedRpc != null) return parsedRpc;
+      } catch (e) {
+        // ignore: avoid_print
+        print('RPC get_latest_professional_location failed: $e');
       }
-      final response = await query
-          .order('recorded_at', ascending: false)
-          .limit(1)
-          .maybeSingle();
-      if (response != null && response['coordinates'] != null) {
-        return _parseProfessionalCoordinates(response['coordinates']);
+
+      // 2) Fallback: direct table read + geography parsing.
+      if (sessionId != null && sessionId.isNotEmpty) {
+        var query = client
+            .from('professional_locations')
+            .select('coordinates, professional_id, recorded_at')
+            .eq('session_id', sessionId);
+        if (professionalId != null && professionalId.isNotEmpty) {
+          query = query.eq('professional_id', professionalId);
+        }
+        final response = await query
+            .order('recorded_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+        if (response != null && response['coordinates'] != null) {
+          final parsed = _parseProfessionalCoordinates(response['coordinates']);
+          if (parsed != null) return parsed;
+          // ignore: avoid_print
+          print(
+            'Could not parse professional coordinates: ${response['coordinates']}',
+          );
+        }
+      }
+
+      if (professionalId != null && professionalId.isNotEmpty) {
+        final response = await client
+            .from('professional_locations')
+            .select('coordinates, professional_id, recorded_at')
+            .eq('professional_id', professionalId)
+            .order('recorded_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+        if (response != null && response['coordinates'] != null) {
+          final parsed = _parseProfessionalCoordinates(response['coordinates']);
+          if (parsed != null) return parsed;
+        }
       }
     } catch (e) {
       // ignore: avoid_print
@@ -1589,12 +2133,41 @@ class SupabaseService {
     return null;
   }
 
+  static Map<String, double>? _parseLatLngPayload(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is List && raw.isNotEmpty) {
+      return _parseLatLngPayload(raw.first);
+    }
+    if (raw is Map) {
+      final map = Map<String, dynamic>.from(raw);
+      final lat = (map['latitude'] as num?)?.toDouble() ??
+          (map['lat'] as num?)?.toDouble();
+      final lng = (map['longitude'] as num?)?.toDouble() ??
+          (map['lng'] as num?)?.toDouble() ??
+          (map['lon'] as num?)?.toDouble();
+      if (lat != null && lng != null) {
+        return {'latitude': lat, 'longitude': lng};
+      }
+      if (map['coordinates'] != null) {
+        return _parseProfessionalCoordinates(map['coordinates']);
+      }
+    }
+    if (raw is String) {
+      try {
+        return _parseLatLngPayload(jsonDecode(raw));
+      } catch (_) {}
+    }
+    return null;
+  }
+
   /// Fetch user notifications for the logged-in client
-  static Future<List<Map<String, dynamic>>> getUserNotifications({int limit = 50}) async {
+  static Future<List<Map<String, dynamic>>> getUserNotifications({
+    int limit = 50,
+  }) async {
     try {
       final user = currentUser;
       if (user == null) return [];
-      
+
       final response = await client
           .from('user_notifications')
           .select()
@@ -1610,7 +2183,9 @@ class SupabaseService {
   }
 
   /// Fetch broadcast notifications relevant to the current consumer user.
-  static Future<List<Map<String, dynamic>>> getBroadcastNotifications({int limit = 50}) async {
+  static Future<List<Map<String, dynamic>>> getBroadcastNotifications({
+    int limit = 50,
+  }) async {
     try {
       final user = currentUser;
       if (user == null) return [];
@@ -1630,7 +2205,9 @@ class SupabaseService {
         final audienceId = row['audience_id']?.toString();
         if (audienceType == 'all') return true;
         if (audienceType == 'user') return audienceId == user.id;
-        if (audienceType == 'hub') return audienceId != null && hubIds.contains(audienceId);
+        if (audienceType == 'hub') {
+          return audienceId != null && hubIds.contains(audienceId);
+        }
         return false;
       }).toList();
     } catch (e) {
@@ -1699,7 +2276,7 @@ class SupabaseService {
     try {
       final user = currentUser;
       if (user == null) return;
-      
+
       final now = DateTime.now().toUtc().toIso8601String();
       await client
           .from('user_notifications')
@@ -1712,13 +2289,22 @@ class SupabaseService {
   }
 
   /// Retrieve all active/upcoming bookings/sessions (pending, confirmed, active) for the user
-  static Future<List<Map<String, dynamic>>> getUpcomingBookings(String userId) async {
+  static Future<List<Map<String, dynamic>>> getUpcomingBookings(
+    String userId,
+  ) async {
     try {
       final responseList = await client
           .from('bookings')
-          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions)')
+          .select(
+            'id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, assignment_status, professionals(full_name, avg_rating, total_sessions)',
+          )
           .eq('user_id', userId)
-          .inFilter('status', ['pending', 'confirmed', 'active', 'in_progress']);
+          .inFilter('status', [
+            'pending',
+            'confirmed',
+            'active',
+            'in_progress',
+          ]);
 
       final List<Map<String, dynamic>> list = [];
       for (final item in responseList) {
@@ -1727,36 +2313,48 @@ class SupabaseService {
         try {
           final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
           final status = item['status'] as String? ?? 'pending';
-          if (!['pending', 'confirmed', 'active', 'in_progress'].contains(status)) continue;
+          if (![
+            'pending',
+            'confirmed',
+            'active',
+            'in_progress',
+          ].contains(status)) {
+            continue;
+          }
 
           final bookingId = item['id'] as String;
           final serviceType = item['service_type'] as String? ?? 'Care';
-          
-          DateTime scheduledStart = DateTime.now();
-          try {
-            final dateStr = item['scheduled_date']?.toString() ?? '';
-            final timeStr = item['scheduled_time']?.toString() ?? '';
-            if (dateStr.isNotEmpty) {
-              if (timeStr.isNotEmpty) {
-                scheduledStart = DateTime.parse('${dateStr}T$timeStr');
-              } else {
-                scheduledStart = DateTime.parse(dateStr);
-              }
-            }
-          } catch (_) {}
 
-          final totalAmount = metadata['total_amount'] as int? ?? 0;
+          DateTime scheduledStart =
+              parseScheduledStartLocal(
+                item['scheduled_date'],
+                item['scheduled_time'],
+              ) ??
+              DateTime.now();
+
+          final totalAmount = (metadata['total_amount'] as num?)?.toInt() ?? 0;
+          final donationAmount =
+              (metadata['donation_amount'] as num?)?.toInt() ?? 0;
+          final serviceSubtotal =
+              (metadata['service_subtotal'] as num?)?.toInt() ?? 0;
+          final gstAmount = (metadata['gst_amount'] as num?)?.toDouble() ?? 0;
+          final tipAmount = (metadata['tip_amount'] as num?)?.toInt() ?? 0;
 
           String caregiverName = 'Sunita Rao';
           double professionalRating = 0.0;
           int professionalTotalSessions = 0;
           if (item['professionals'] != null) {
             final professional = item['professionals'] as Map<String, dynamic>;
-            caregiverName = professional['full_name'] as String? ?? caregiverName;
+            caregiverName =
+                professional['full_name'] as String? ?? caregiverName;
             professionalRating =
-                double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
+                double.tryParse(professional['avg_rating']?.toString() ?? '') ??
+                0.0;
             professionalTotalSessions =
-                int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
+                int.tryParse(
+                  professional['total_sessions']?.toString() ?? '',
+                ) ??
+                0;
           }
 
           String activeStatus = status;
@@ -1786,25 +2384,58 @@ class SupabaseService {
             // ignore
           }
 
+          String userAddress = '';
+          try {
+            final addressId = metadata['address_id'] as String?;
+            if (addressId != null) {
+              final addrRes = await client
+                  .from('addresses')
+                  .select('flat, street, city, pin_code')
+                  .eq('id', addressId)
+                  .maybeSingle();
+              if (addrRes != null) {
+                final flat = addrRes['flat'] ?? '';
+                final street = addrRes['street'] ?? '';
+                final city = addrRes['city'] ?? '';
+                final pin = addrRes['pin_code'] ?? '';
+                userAddress = '$flat, $street, $city, $pin';
+              }
+            }
+          } catch (_) {}
+
           list.add({
             'booking_id': bookingId,
             'session_id': sessionId,
+            'professional_id': item['professional_id']?.toString(),
+            'assignment_status':
+                item['assignment_status']?.toString() ?? 'pending',
             'title': serviceType,
             'scheduled_start': scheduledStart,
             'actual_start': actualStart,
             'actual_end': actualEnd,
             'amount': totalAmount,
+            'donation_amount': donationAmount,
+            'service_subtotal': serviceSubtotal,
+            'gst_amount': gstAmount,
+            'tip_amount': tipAmount,
             'status': activeStatus,
             'caregiver_name': caregiverName,
             'professional_rating': professionalRating,
             'professional_total_sessions': professionalTotalSessions,
+            'user_address': userAddress,
+            'duration_hours':
+                (item['duration_hours'] as num?)?.toDouble() ?? 2.0,
             'arrival_requested': activeStatus == 'arrived',
             'care_notes': metadata['care_notes'],
           });
         } catch (_) {}
       }
 
-      list.sort((a, b) => (a['scheduled_start'] as DateTime).compareTo(b['scheduled_start'] as DateTime));
+      list.sort(
+        (a, b) => (a['scheduled_start'] as DateTime).compareTo(
+          b['scheduled_start'] as DateTime,
+        ),
+      );
       return list;
     } catch (e) {
       // ignore: avoid_print
@@ -1814,11 +2445,15 @@ class SupabaseService {
   }
 
   /// Retrieve the recent completed sessions/bookings for the user
-  static Future<List<Map<String, dynamic>>> getRecentSessions(String userId) async {
+  static Future<List<Map<String, dynamic>>> getRecentSessions(
+    String userId,
+  ) async {
     try {
       final responseList = await client
           .from('bookings')
-          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions)')
+          .select(
+            'id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions)',
+          )
           .eq('user_id', userId)
           .inFilter('status', ['completed', 'no_show']);
 
@@ -1833,32 +2468,37 @@ class SupabaseService {
 
           final bookingId = item['id'] as String;
           final serviceType = item['service_type'] as String? ?? 'Care';
-          
-          DateTime scheduledStart = DateTime.now();
-          try {
-            final dateStr = item['scheduled_date']?.toString() ?? '';
-            final timeStr = item['scheduled_time']?.toString() ?? '';
-            if (dateStr.isNotEmpty) {
-              if (timeStr.isNotEmpty) {
-                scheduledStart = DateTime.parse('${dateStr}T$timeStr');
-              } else {
-                scheduledStart = DateTime.parse(dateStr);
-              }
-            }
-          } catch (_) {}
 
-          final totalAmount = metadata['total_amount'] as int? ?? 0;
+          DateTime scheduledStart =
+              parseScheduledStartLocal(
+                item['scheduled_date'],
+                item['scheduled_time'],
+              ) ??
+              DateTime.now();
+
+          final totalAmount = (metadata['total_amount'] as num?)?.toInt() ?? 0;
+          final donationAmount =
+              (metadata['donation_amount'] as num?)?.toInt() ?? 0;
+          final serviceSubtotal =
+              (metadata['service_subtotal'] as num?)?.toInt() ?? 0;
+          final gstAmount = (metadata['gst_amount'] as num?)?.toDouble() ?? 0;
+          final tipAmount = (metadata['tip_amount'] as num?)?.toInt() ?? 0;
 
           String caregiverName = 'Sunita Rao';
           double professionalRating = 0.0;
           int professionalTotalSessions = 0;
           if (item['professionals'] != null) {
             final professional = item['professionals'] as Map<String, dynamic>;
-            caregiverName = professional['full_name'] as String? ?? caregiverName;
+            caregiverName =
+                professional['full_name'] as String? ?? caregiverName;
             professionalRating =
-                double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
+                double.tryParse(professional['avg_rating']?.toString() ?? '') ??
+                0.0;
             professionalTotalSessions =
-                int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
+                int.tryParse(
+                  professional['total_sessions']?.toString() ?? '',
+                ) ??
+                0;
           }
 
           bool isRated = false;
@@ -1881,7 +2521,9 @@ class SupabaseService {
               sessionId = sessionRes['id'] as String;
               final feedbackRes = await client
                   .from('session_feedback')
-                  .select('rating, punctuality, professionalism, quality, comment')
+                  .select(
+                    'rating, punctuality, professionalism, quality, comment',
+                  )
                   .eq('session_id', sessionId)
                   .eq('user_id', userId)
                   .limit(1)
@@ -1894,7 +2536,7 @@ class SupabaseService {
                 professionalism = feedbackRes['professionalism'] as int? ?? 5;
                 quality = feedbackRes['quality'] as int? ?? 5;
                 comment = feedbackRes['comment'] as String? ?? '';
-                
+
                 if (punctuality == 5) tags.add('Punctual');
                 if (professionalism == 5) tags.add('Professional');
                 if (quality == 5) tags.add('Caring');
@@ -1914,6 +2556,10 @@ class SupabaseService {
             'professional_rating': professionalRating,
             'professional_total_sessions': professionalTotalSessions,
             'amount': totalAmount,
+            'donation_amount': donationAmount,
+            'service_subtotal': serviceSubtotal,
+            'gst_amount': gstAmount,
+            'tip_amount': tipAmount,
             'status': status,
             'isRated': isRated,
             'rating': rating,
@@ -1926,7 +2572,11 @@ class SupabaseService {
         } catch (_) {}
       }
 
-      list.sort((a, b) => (b['scheduled_start'] as DateTime).compareTo(a['scheduled_start'] as DateTime));
+      list.sort(
+        (a, b) => (b['scheduled_start'] as DateTime).compareTo(
+          a['scheduled_start'] as DateTime,
+        ),
+      );
       return list;
     } catch (e) {
       // ignore: avoid_print
@@ -1936,7 +2586,9 @@ class SupabaseService {
   }
 
   /// Retrieve the activity logs for a session from the database
-  static Future<List<Map<String, dynamic>>> getSessionLogs(String sessionId) async {
+  static Future<List<Map<String, dynamic>>> getSessionLogs(
+    String sessionId,
+  ) async {
     try {
       final response = await client
           .from('activity_logs')
@@ -1955,7 +2607,9 @@ class SupabaseService {
   // Private helpers for mapping data
   static String mapReasonToServicePillar(String reason) {
     final r = reason.toLowerCase();
-    if (r.contains('mother') || r.contains('post-delivery') || r.contains('postdelivery')) {
+    if (r.contains('mother') ||
+        r.contains('post-delivery') ||
+        r.contains('postdelivery')) {
       return 'post_delivery_care';
     }
     if (r.contains('pregnancy') || r.contains('pre-pregnancy')) {
@@ -1964,13 +2618,17 @@ class SupabaseService {
     if (r.contains('child') || r.contains('baby') || r.contains('sit')) {
       return 'certified_babysitting';
     }
-    if (r.contains('mobility') || r.contains('elder') || r.contains('surgery')) {
+    if (r.contains('mobility') ||
+        r.contains('elder') ||
+        r.contains('surgery')) {
       return 'mobility_support';
     }
     if (r.contains('bath') || r.contains('groom')) {
       return 'bathing_grooming';
     }
-    if (r.contains('admin') || r.contains('concierge') || r.contains('organization')) {
+    if (r.contains('admin') ||
+        r.contains('concierge') ||
+        r.contains('organization')) {
       return 'admin_concierge';
     }
     return 'post_delivery_care';
@@ -2018,7 +2676,10 @@ class SupabaseService {
           // Update session status to completed
           await client
               .from('sessions')
-              .update({'status': 'completed', 'end_time': DateTime.now().toUtc().toIso8601String()})
+              .update({
+                'status': 'completed',
+                'end_time': DateTime.now().toUtc().toIso8601String(),
+              })
               .eq('booking_id', bookingId);
         }
       }
@@ -2031,7 +2692,8 @@ class SupabaseService {
   /// Start the session, updating status to 'active' and actual_start to now
   static Future<void> startMockSession(String bookingId) async {
     _initMockData();
-    if (_mockActiveBooking != null && _mockActiveBooking!['booking_id'] == bookingId) {
+    if (_mockActiveBooking != null &&
+        _mockActiveBooking!['booking_id'] == bookingId) {
       _mockActiveBooking!['status'] = 'active';
       _mockActiveBooking!['actual_start'] = DateTime.now();
     }
@@ -2049,7 +2711,9 @@ class SupabaseService {
       }
 
       final startTime = DateTime.now().toUtc();
-      final endTime = startTime.add(Duration(minutes: (durationHours * 60).round()));
+      final endTime = startTime.add(
+        Duration(minutes: (durationHours * 60).round()),
+      );
 
       await client
           .from('sessions')
@@ -2071,7 +2735,9 @@ class SupabaseService {
   }
 
   /// Retrieve latest status of a booking/session
-  static Future<Map<String, dynamic>?> getBookingStatus(String bookingId) async {
+  static Future<Map<String, dynamic>?> getBookingStatus(
+    String bookingId,
+  ) async {
     _initMockData();
     if (bookingId == 'mock-booking-active-1' && _mockActiveBooking != null) {
       return _mockActiveBooking;
@@ -2079,7 +2745,9 @@ class SupabaseService {
     try {
       final response = await client
           .from('bookings')
-          .select('id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, professionals(full_name, avg_rating, total_sessions), hubs(name, address)')
+          .select(
+            'id, hub_id, professional_id, service_type, status, scheduled_date, scheduled_time, duration_hours, notes, assignment_status, professionals(full_name, avg_rating, total_sessions), hubs(name, address)',
+          )
           .eq('id', bookingId)
           .maybeSingle();
 
@@ -2088,16 +2756,12 @@ class SupabaseService {
       final serviceType = response['service_type'] as String? ?? 'Care';
       final status = response['status'] as String? ?? 'pending';
 
-      DateTime scheduledStart = DateTime.now();
-      try {
-        final dateStr = response['scheduled_date']?.toString() ?? '';
-        final timeStr = response['scheduled_time']?.toString() ?? '';
-        if (dateStr.isNotEmpty) {
-          scheduledStart = timeStr.isNotEmpty
-              ? DateTime.parse('${dateStr}T$timeStr')
-              : DateTime.parse(dateStr);
-        }
-      } catch (_) {}
+      DateTime scheduledStart =
+          parseScheduledStartLocal(
+            response['scheduled_date'],
+            response['scheduled_time'],
+          ) ??
+          DateTime.now();
 
       final notesStr = response['notes'] as String?;
       int totalAmount = 0;
@@ -2119,7 +2783,8 @@ class SupabaseService {
         final professional = response['professionals'] as Map<String, dynamic>;
         caregiverName = professional['full_name'] as String? ?? caregiverName;
         professionalRating =
-            double.tryParse(professional['avg_rating']?.toString() ?? '') ?? 0.0;
+            double.tryParse(professional['avg_rating']?.toString() ?? '') ??
+            0.0;
         professionalTotalSessions =
             int.tryParse(professional['total_sessions']?.toString() ?? '') ?? 0;
       }
@@ -2163,7 +2828,13 @@ class SupabaseService {
             .limit(1)
             .maybeSingle();
         if (sessionRes != null) {
-          activeStatus = sessionRes['status'] as String? ?? activeStatus;
+          final sessionStatus =
+              (sessionRes['status'] as String? ?? activeStatus).toLowerCase();
+          // Prefer booking terminal statuses so no-show isn't overwritten.
+          final bookingTerminal = {'no_show', 'cancelled', 'completed'};
+          activeStatus = bookingTerminal.contains(status.toLowerCase())
+              ? status
+              : sessionStatus;
           sessionId = sessionRes['id'] as String?;
           arrivalCode = sessionRes['arrival_code']?.toString();
           final startTimeStr = sessionRes['start_time'] as String?;
@@ -2176,6 +2847,8 @@ class SupabaseService {
       return {
         'booking_id': bookingId,
         'session_id': sessionId,
+        'professional_id': response['professional_id']?.toString(),
+        'assignment_status': response['assignment_status']?.toString(),
         'title': serviceType,
         'scheduled_start': scheduledStart,
         'actual_start': actualStart,
@@ -2191,7 +2864,8 @@ class SupabaseService {
         'arrival_requested': activeStatus == 'arrived',
         'arrival_code': arrivalCode,
         'care_notes': careNotes,
-        'duration_hours': (response['duration_hours'] as num?)?.toDouble() ?? 2.0,
+        'duration_hours':
+            (response['duration_hours'] as num?)?.toDouble() ?? 2.0,
       };
     } catch (e) {
       // ignore: avoid_print
@@ -2199,7 +2873,6 @@ class SupabaseService {
     }
     return null;
   }
-
 
   /// Submit rating feedback for a completed session
   static Future<void> rateSession(
@@ -2210,6 +2883,8 @@ class SupabaseService {
     required int qualityOfCare,
     required List<String> tags,
     String? comment,
+    int tipAmount = 0,
+    String? tipPaymentId,
   }) async {
     _initMockData();
     // Update local in-memory mock if it matches
@@ -2278,6 +2953,32 @@ class SupabaseService {
       } else {
         await client.from('session_feedback').insert(feedbackPayload);
       }
+
+      if (tipAmount > 0) {
+        final bookingRes = await client
+            .from('bookings')
+            .select('notes')
+            .eq('id', bookingId)
+            .maybeSingle();
+        if (bookingRes != null) {
+          Map<String, dynamic> metadata = {};
+          final notesStr = bookingRes['notes'] as String?;
+          if (notesStr != null) {
+            try {
+              metadata = Map<String, dynamic>.from(
+                jsonDecode(notesStr) as Map<String, dynamic>,
+              );
+            } catch (_) {}
+          }
+          metadata['tip_amount'] = tipAmount;
+          metadata['tip_payment_id'] = tipPaymentId;
+          metadata['tip_paid_at'] = DateTime.now().toIso8601String();
+          await client
+              .from('bookings')
+              .update({'notes': jsonEncode(metadata)})
+              .eq('id', bookingId);
+        }
+      }
     } catch (e) {
       // ignore: avoid_print
       print('Error in rateSession: $e');
@@ -2286,11 +2987,13 @@ class SupabaseService {
   }
 
   /// Fetch activity logs for a given session from Supabase.
-  static Future<List<Map<String, dynamic>>> getActivityLogs(String sessionId) async {
+  static Future<List<Map<String, dynamic>>> getActivityLogs(
+    String sessionId,
+  ) async {
     try {
       final response = await client
           .from('activity_logs')
-          .select('logged_at, activity_type, note')
+          .select('id, logged_at, activity_type, note, session_id')
           .eq('session_id', sessionId)
           .order('logged_at', ascending: false);
 
@@ -2303,12 +3006,16 @@ class SupabaseService {
   }
 
   /// Backward-compatible alias.
-  static Future<List<Map<String, dynamic>>> getSessionActivityLogs(String sessionId) {
+  static Future<List<Map<String, dynamic>>> getSessionActivityLogs(
+    String sessionId,
+  ) {
     return getActivityLogs(sessionId);
   }
 
   /// Fetch chat messages for a session, oldest first for chat rendering.
-  static Future<List<Map<String, dynamic>>> getMessages(String sessionId) async {
+  static Future<List<Map<String, dynamic>>> getMessages(
+    String sessionId,
+  ) async {
     try {
       final response = await client
           .from('messages')
@@ -2324,15 +3031,26 @@ class SupabaseService {
   }
 
   /// Realtime stream for session chat messages.
-  static Stream<List<Map<String, dynamic>>> getMessagesStream(String sessionId) {
+  static Stream<List<Map<String, dynamic>>> getMessagesStream(
+    String sessionId,
+  ) {
     return client
         .from('messages')
         .stream(primaryKey: ['id'])
         .eq('session_id', sessionId)
         .order('sent_at', ascending: true)
-        .map((rows) => rows
-            .map((row) => Map<String, dynamic>.from(row))
-            .toList());
+        .map((rows) {
+          final mapped =
+              rows.map((row) => Map<String, dynamic>.from(row)).toList();
+          mapped.sort((a, b) {
+            final aTime = DateTime.tryParse(a['sent_at']?.toString() ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            final bTime = DateTime.tryParse(b['sent_at']?.toString() ?? '') ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            return aTime.compareTo(bTime);
+          });
+          return mapped;
+        });
   }
 
   /// Send a chat message for a session.
@@ -2360,8 +3078,57 @@ class SupabaseService {
     }
   }
 
+  static final Map<String, DateTime> _chatLastReadAtUtc = {};
+
+  static void markChatRead(String sessionId) {
+    if (sessionId.isEmpty) return;
+    _chatLastReadAtUtc[sessionId] = DateTime.now().toUtc();
+  }
+
+  static DateTime? chatLastReadAt(String sessionId) =>
+      _chatLastReadAtUtc[sessionId];
+
+  /// Unseen inbound messages for the consumer (not sent by the client).
+  static Future<int> getUnreadChatCount(String sessionId) async {
+    if (sessionId.isEmpty) return 0;
+    try {
+      final messages = await getMessages(sessionId);
+      final lastRead = _chatLastReadAtUtc[sessionId];
+      final userId = currentUser?.id;
+      var count = 0;
+      for (final message in messages) {
+        final senderType = message['sender_type']?.toString() ?? '';
+        final senderId = message['sender_id']?.toString();
+        if (senderType == 'client' ||
+            (userId != null && senderId == userId)) {
+          continue;
+        }
+        final sentAt = DateTime.tryParse(message['sent_at']?.toString() ?? '');
+        if (sentAt == null) continue;
+        final sentUtc = sentAt.toUtc();
+        if (lastRead == null || sentUtc.isAfter(lastRead)) {
+          count++;
+        }
+      }
+      return count;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static bool isInboundChatMessage(Map<String, dynamic> message) {
+    final senderType = message['sender_type']?.toString() ?? '';
+    final senderId = message['sender_id']?.toString();
+    final userId = currentUser?.id;
+    if (senderType == 'client') return false;
+    if (userId != null && senderId == userId) return false;
+    return true;
+  }
+
   /// Fetch all saved addresses for a user
-  static Future<List<Map<String, dynamic>>> getUserAddresses(String userId) async {
+  static Future<List<Map<String, dynamic>>> getUserAddresses(
+    String userId,
+  ) async {
     try {
       final response = await client
           .from('addresses')
@@ -2443,7 +3210,11 @@ class SupabaseService {
   }
 
   /// Set label (Home/Work/None) for an address
-  static Future<void> setAddressLabel(String userId, String addressId, String? label) async {
+  static Future<void> setAddressLabel(
+    String userId,
+    String addressId,
+    String? label,
+  ) async {
     try {
       // 1. Fetch current address row
       final addressRow = await client
@@ -2452,10 +3223,10 @@ class SupabaseService {
           .eq('id', addressId)
           .maybeSingle();
       if (addressRow == null) return;
-      
+
       final currentFlat = addressRow['flat'] as String? ?? '';
       final cleanFlat = cleanFlatName(currentFlat);
-      
+
       String newFlat = cleanFlat;
       if (label == 'Home') {
         newFlat = '[Home] $cleanFlat';
@@ -2492,7 +3263,7 @@ class SupabaseService {
           }
         }
       }
-      
+
       // 2. Update this address
       await client
           .from('addresses')
@@ -2592,14 +3363,20 @@ class SupabaseService {
       double durationHours = 2.0;
       try {
         final normalizedDuration = selectedDuration.toLowerCase();
-        final hrMatch = RegExp(r'(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour)').firstMatch(normalizedDuration);
-        final minMatch = RegExp(r'(\d+)\s*(m|min|mins|minute)').firstMatch(normalizedDuration);
+        final hrMatch = RegExp(
+          r'(\d+(?:\.\d+)?)\s*(h|hr|hrs|hour)',
+        ).firstMatch(normalizedDuration);
+        final minMatch = RegExp(
+          r'(\d+)\s*(m|min|mins|minute)',
+        ).firstMatch(normalizedDuration);
         if (hrMatch != null || minMatch != null) {
           final hrs = hrMatch != null ? double.parse(hrMatch.group(1)!) : 0.0;
           final mins = minMatch != null ? int.parse(minMatch.group(1)!) : 0;
           durationHours = hrs + (mins / 60.0);
         } else {
-          final numMatch = RegExp(r'(\d+(?:\.\d+)?)').firstMatch(normalizedDuration);
+          final numMatch = RegExp(
+            r'(\d+(?:\.\d+)?)',
+          ).firstMatch(normalizedDuration);
           if (numMatch != null) {
             durationHours = double.parse(numMatch.group(1)!);
           }
@@ -2607,7 +3384,9 @@ class SupabaseService {
       } catch (_) {}
       if (durationHours <= 0) durationHours = 2.0;
 
-      final bookingEnd = bookingStart.add(Duration(minutes: (durationHours * 60).round()));
+      final bookingEnd = bookingStart.add(
+        Duration(minutes: (durationHours * 60).round()),
+      );
 
       DateTime? parseBookingStart(dynamic dateObj, dynamic timeObj) {
         final dateStr = dateObj?.toString() ?? '';
@@ -2667,7 +3446,9 @@ class SupabaseService {
       try {
         final shiftRes = await client
             .from('shifts')
-            .select('professional_id, start_time, end_time, status, recurring_days, is_standby, hub_id')
+            .select(
+              'professional_id, start_time, end_time, status, recurring_days, is_standby, hub_id',
+            )
             .inFilter('professional_id', proIds)
             .eq('status', 'scheduled');
         shifts = List<Map<String, dynamic>>.from(shiftRes);
@@ -2682,9 +3463,16 @@ class SupabaseService {
       try {
         final bookingRes = await client
             .from('bookings')
-            .select('professional_id, scheduled_date, scheduled_time, duration_hours, status')
+            .select(
+              'professional_id, scheduled_date, scheduled_time, duration_hours, status',
+            )
             .inFilter('professional_id', proIds)
-            .inFilter('status', ['pending', 'confirmed', 'active', 'in_progress']);
+            .inFilter('status', [
+              'pending',
+              'confirmed',
+              'active',
+              'in_progress',
+            ]);
         overlappingBookings = List<Map<String, dynamic>>.from(bookingRes);
       } catch (e) {
         // ignore: avoid_print
@@ -2698,7 +3486,12 @@ class SupabaseService {
             .from('sessions')
             .select('professional_id, start_time, end_time, status')
             .inFilter('professional_id', proIds)
-            .inFilter('status', ['scheduled', 'in_progress', 'transit', 'active']);
+            .inFilter('status', [
+              'scheduled',
+              'in_progress',
+              'transit',
+              'active',
+            ]);
         overlappingSessions = List<Map<String, dynamic>>.from(sessionRes);
       } catch (e) {
         // ignore: avoid_print
@@ -2715,7 +3508,9 @@ class SupabaseService {
             .eq('user_id', userId);
         userFeedbacks = List<Map<String, dynamic>>.from(feedbackRes);
 
-        final fbSessionIds = userFeedbacks.map((f) => f['session_id'] as String).toList();
+        final fbSessionIds = userFeedbacks
+            .map((f) => f['session_id'] as String)
+            .toList();
         if (fbSessionIds.isNotEmpty) {
           final sessRes = await client
               .from('sessions')
@@ -2731,7 +3526,11 @@ class SupabaseService {
       // 8. Fetch all active sessions this week for workload calculation
       final now = DateTime.now();
       final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
-      final weekStart = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
+      final weekStart = DateTime(
+        startOfWeek.year,
+        startOfWeek.month,
+        startOfWeek.day,
+      );
       List<Map<String, dynamic>> weeklySessions = [];
       try {
         final weeklyRes = await client
@@ -2752,10 +3551,13 @@ class SupabaseService {
         final dutyStatus = p['duty_status']?.toString().toLowerCase() ?? '';
 
         // Hard Filter 1: Employment status must be active
-        if (p['employment_status']?.toString().toLowerCase() != 'active') continue;
+        if (p['employment_status']?.toString().toLowerCase() != 'active') {
+          continue;
+        }
 
         // Hard Filter 2: Background check must not be failed (allow 'verified', 'passed', or 'pending' fallback for testing, but prefer verified)
-        final bgStatus = p['background_check_status']?.toString().toLowerCase() ?? '';
+        final bgStatus =
+            p['background_check_status']?.toString().toLowerCase() ?? '';
         if (bgStatus == 'failed' || bgStatus == 'rejected') continue;
 
         // Hard Filter 3: Service Pillar compatibility
@@ -2766,11 +3568,13 @@ class SupabaseService {
               .map((e) => e.toString().trim().toLowerCase())
               .where((e) => e.isNotEmpty)
               .toList();
-          supportsPillar = normalizedPillars.isEmpty ||
+          supportsPillar =
+              normalizedPillars.isEmpty ||
               normalizedPillars.contains(servicePillar.toLowerCase());
         } else if (pillars is String) {
           final normalizedPillar = pillars.trim().toLowerCase();
-          supportsPillar = normalizedPillar.isEmpty ||
+          supportsPillar =
+              normalizedPillar.isEmpty ||
               normalizedPillar == servicePillar.toLowerCase();
         } else if (pillars == null) {
           // Do not lock out standby professionals just because service pillars
@@ -2796,9 +3600,9 @@ class SupabaseService {
               final recurringDaysRaw = s['recurring_days'];
               final recurringDays = recurringDaysRaw is List
                   ? recurringDaysRaw
-                      .map((e) => int.tryParse(e.toString()))
-                      .whereType<int>()
-                      .toList()
+                        .map((e) => int.tryParse(e.toString()))
+                        .whereType<int>()
+                        .toList()
                   : <int>[];
 
               if (recurringDays.isNotEmpty) {
@@ -2827,8 +3631,12 @@ class SupabaseService {
               }
 
               hasValidShiftWindow = true;
-              if (shiftWindowStart.isBefore(bookingStart.add(const Duration(seconds: 1))) &&
-                  shiftWindowEnd.isAfter(bookingEnd.subtract(const Duration(seconds: 1)))) {
+              if (shiftWindowStart.isBefore(
+                    bookingStart.add(const Duration(seconds: 1)),
+                  ) &&
+                  shiftWindowEnd.isAfter(
+                    bookingEnd.subtract(const Duration(seconds: 1)),
+                  )) {
                 hasCoveringShift = true;
                 break;
               }
@@ -2843,15 +3651,22 @@ class SupabaseService {
         final paddedStart = bookingStart.subtract(buffer);
         final paddedEnd = bookingEnd.add(buffer);
 
-        final proBookings = overlappingBookings.where((b) => b['professional_id'] == pId);
+        final proBookings = overlappingBookings.where(
+          (b) => b['professional_id'] == pId,
+        );
         for (final b in proBookings) {
-          final existingStart = parseBookingStart(b['scheduled_date'], b['scheduled_time']);
+          final existingStart = parseBookingStart(
+            b['scheduled_date'],
+            b['scheduled_time'],
+          );
           if (existingStart == null) continue;
-          final existingDurationHours = (b['duration_hours'] as num?)?.toDouble() ?? 2.0;
+          final existingDurationHours =
+              (b['duration_hours'] as num?)?.toDouble() ?? 2.0;
           final existingEnd = existingStart.add(
             Duration(minutes: (existingDurationHours * 60).round()),
           );
-          if (existingStart.isBefore(paddedEnd) && existingEnd.isAfter(paddedStart)) {
+          if (existingStart.isBefore(paddedEnd) &&
+              existingEnd.isAfter(paddedStart)) {
             hasConflict = true;
             break;
           }
@@ -2859,7 +3674,9 @@ class SupabaseService {
         if (hasConflict) continue;
 
         // Hard Filter 6: Session overlap conflict checks (30 mins travel buffer)
-        final proSessions = overlappingSessions.where((s) => s['professional_id'] == pId);
+        final proSessions = overlappingSessions.where(
+          (s) => s['professional_id'] == pId,
+        );
         for (final s in proSessions) {
           final sStartStr = s['start_time'];
           final sEndStr = s['end_time'];
@@ -2878,31 +3695,47 @@ class SupabaseService {
         if (hasConflict) continue;
 
         // --- Calculate Soft scoring ---
-        
+
         // Scoring factor 1: Repeat preferred professional (Weight = 0.40)
         double preferenceScore = 0.0;
         if (preferSameProfessional) {
-          final proPastSessions = pastSessions.where((s) => s['professional_id'] == pId).map((s) => s['id'] as String).toSet();
+          final proPastSessions = pastSessions
+              .where((s) => s['professional_id'] == pId)
+              .map((s) => s['id'] as String)
+              .toSet();
           if (proPastSessions.isNotEmpty) {
-            final proFeedbacks = userFeedbacks.where((f) => proPastSessions.contains(f['session_id']));
+            final proFeedbacks = userFeedbacks.where(
+              (f) => proPastSessions.contains(f['session_id']),
+            );
             if (proFeedbacks.isNotEmpty) {
-              final avgUserRating = proFeedbacks.map((f) => (f['rating'] as num).toDouble()).reduce((a, b) => a + b) / proFeedbacks.length;
+              final avgUserRating =
+                  proFeedbacks
+                      .map((f) => (f['rating'] as num).toDouble())
+                      .reduce((a, b) => a + b) /
+                  proFeedbacks.length;
               preferenceScore = avgUserRating >= 4.5 ? 100.0 : 50.0;
             }
           }
         }
 
         // Scoring factor 2: Star rating (Weight = 0.25)
-        final dbRating = double.tryParse(p['avg_rating']?.toString() ?? '') ?? 0.0;
+        final dbRating =
+            double.tryParse(p['avg_rating']?.toString() ?? '') ?? 0.0;
         final ratingScore = dbRating * 20.0; // scale 0-5 to 0-100
 
         // Scoring factor 3: Experience (Weight = 0.15)
-        final dbExperience = int.tryParse(p['years_of_experience']?.toString() ?? '') ?? 0;
+        final dbExperience =
+            int.tryParse(p['years_of_experience']?.toString() ?? '') ?? 0;
         final experienceScore = (dbExperience * 10.0).clamp(0.0, 100.0);
 
         // Scoring factor 4: Workload Balance (Weight = 0.20)
-        final proWeekSessions = weeklySessions.where((s) => s['professional_id'] == pId).length;
-        double workloadScore = (100.0 - (proWeekSessions * 10.0)).clamp(0.0, 100.0);
+        final proWeekSessions = weeklySessions
+            .where((s) => s['professional_id'] == pId)
+            .length;
+        double workloadScore = (100.0 - (proWeekSessions * 10.0)).clamp(
+          0.0,
+          100.0,
+        );
 
         // Small boost for professionals explicitly marked standby at the hub.
         if (dutyStatus == 'standby') {
@@ -2910,7 +3743,8 @@ class SupabaseService {
         }
 
         // Final score sum
-        final finalScore = (preferenceScore * 0.40) +
+        final finalScore =
+            (preferenceScore * 0.40) +
             (ratingScore * 0.25) +
             (experienceScore * 0.15) +
             (workloadScore * 0.20);
@@ -2926,7 +3760,11 @@ class SupabaseService {
       }
 
       // Sort by score descending
-      eligibleAndScored.sort((a, b) => (b['matching_score'] as double).compareTo(a['matching_score'] as double));
+      eligibleAndScored.sort(
+        (a, b) => (b['matching_score'] as double).compareTo(
+          a['matching_score'] as double,
+        ),
+      );
 
       return eligibleAndScored;
     } catch (e) {
@@ -2936,27 +3774,47 @@ class SupabaseService {
     }
   }
 
-  /// Mark booking as no-show when the professional fails to arrive
+  /// Mark booking as no-show when the professional fails to arrive.
+  /// Closes the session so the staff app drops it from active work.
   static Future<void> markNoShow(String bookingId) async {
     _initMockData();
     if (bookingId == 'mock-booking-active-1' && _mockActiveBooking != null) {
       _mockActiveBooking!['status'] = 'no_show';
     }
     try {
+      String? professionalId;
+      try {
+        final booking = await client
+            .from('bookings')
+            .select('professional_id')
+            .eq('id', bookingId)
+            .maybeSingle();
+        professionalId = booking?['professional_id']?.toString();
+      } catch (_) {}
+
       await client
           .from('bookings')
           .update({'status': 'no_show'})
           .eq('id', bookingId);
-          
-      // Also update any scheduled session associated with it to 'no_show'
+
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      // Terminal session status shared by consumer + staff apps.
       await client
           .from('sessions')
-          .update({'status': 'no_show'})
+          .update({'status': 'no_show', 'end_time': nowIso})
           .eq('booking_id', bookingId);
+
+      if (professionalId != null && professionalId.isNotEmpty) {
+        try {
+          await client
+              .from('professionals')
+              .update({'duty_status': 'standby'})
+              .eq('id', professionalId);
+        } catch (_) {}
+      }
     } catch (e) {
       // ignore: avoid_print
       print('Error marking booking as no-show: $e');
     }
   }
 }
-

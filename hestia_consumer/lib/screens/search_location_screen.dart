@@ -560,29 +560,37 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                                 width: double.infinity,
                                 padding: const EdgeInsets.all(20.0),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF5ECE3),
+                                  color: isPrimary
+                                      ? HestiaColors.primary
+                                      : const Color(0xFFFAF8F6),
                                   borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: HestiaColors.primary,
-                                    width: isPrimary ? 2 : 1.5,
-                                  ),
+                                  border: isPrimary
+                                      ? null
+                                      : Border.all(
+                                          color: HestiaColors.primary,
+                                          width: 1.5,
+                                        ),
                                 ),
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    // Location Pin / Home / Work badge (brown tinted glass container)
+                                    // Location Pin / Home / Work badge
                                     Container(
                                       width: 44,
                                       height: 44,
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFFE6D5C5).withValues(alpha: 0.4),
+                                        color: isPrimary
+                                            ? Colors.white.withValues(alpha: 0.22)
+                                            : const Color(0xFFE6D5C5).withValues(alpha: 0.4),
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Icon(
                                         label == 'Home'
                                             ? Icons.home_outlined
                                             : (label == 'Work' ? Icons.work_outline : Icons.location_on_outlined),
-                                        color: const Color(0xFF6F4E37),
+                                        color: isPrimary
+                                            ? Colors.white
+                                            : HestiaColors.primary,
                                         size: 24,
                                       ),
                                     ),
@@ -597,42 +605,23 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                                             crossAxisAlignment: CrossAxisAlignment.center,
                                             children: [
                                               Expanded(
-                                                child: Wrap(
-                                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                                  spacing: 8,
-                                                  runSpacing: 4,
-                                                  children: [
-                                                    Text(
-                                                      label ?? 'Address',
-                                                      style: const TextStyle(
-                                                        fontSize: 16,
-                                                        fontWeight: FontWeight.bold,
-                                                        color: Color(0xFF5E3D1D),
-                                                      ),
-                                                    ),
-                                                    if (isPrimary)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(0xFFFAF2EB),
-                                                          borderRadius: BorderRadius.circular(8),
-                                                        ),
-                                                        child: const Text(
-                                                          'Currently selected',
-                                                          style: TextStyle(
-                                                            color: HestiaColors.primary,
-                                                            fontSize: 11,
-                                                            fontWeight: FontWeight.w600,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                  ],
+                                                child: Text(
+                                                  label ?? 'Address',
+                                                  style: TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: isPrimary
+                                                        ? Colors.white
+                                                        : const Color(0xFF5E3D1D),
+                                                  ),
                                                 ),
                                               ),
                                               PopupMenuButton<String>(
-                                                icon: const Icon(
+                                                icon: Icon(
                                                   Icons.more_vert,
-                                                  color: Color(0xFF6F4E37),
+                                                  color: isPrimary
+                                                      ? Colors.white
+                                                      : HestiaColors.primary,
                                                   size: 20,
                                                 ),
                                                 padding: EdgeInsets.zero,
@@ -759,18 +748,22 @@ class _SearchLocationScreenState extends State<SearchLocationScreen> {
                                           const SizedBox(height: 8),
                                           Text(
                                             currentAddressText,
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                               fontSize: 13,
-                                              color: Color(0xFF6F4E37),
+                                              color: isPrimary
+                                                  ? Colors.white.withValues(alpha: 0.9)
+                                                  : HestiaColors.primary,
                                               height: 1.45,
                                             ),
                                           ),
                                           const SizedBox(height: 6),
                                           Text(
                                             'Mobile: $_phone',
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                               fontSize: 13,
-                                              color: Color(0xFF6F4E37),
+                                              color: isPrimary
+                                                  ? Colors.white.withValues(alpha: 0.9)
+                                                  : HestiaColors.primary,
                                             ),
                                           ),
                                           if (widget.isPostSignInJourney && isPrimary) ...[

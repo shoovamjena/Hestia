@@ -559,9 +559,18 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
 
     if (mounted) {
       setState(() {
-        _isWithinCoverage = minDistance <= 50.0;
+        _isWithinCoverage =
+            minDistance <= SupabaseService.coverageRadiusKm;
       });
     }
+
+    // Prefer server RPC when available (non-blocking refresh)
+    SupabaseService.resolveHubCoverage(lat, lng).then((resolved) {
+      if (!mounted || resolved == null) return;
+      setState(() {
+        _isWithinCoverage = resolved['zone_verified'] == true;
+      });
+    });
   }
 
   Future<void> _fetchHubsFromDb() async {
@@ -639,6 +648,8 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
           'street': _streetController.text.trim(),
           'city': _cityController.text.trim(),
           'pincode': _pincodeController.text.trim(),
+          'latitude': _currentMapPosition.latitude,
+          'longitude': _currentMapPosition.longitude,
         };
         if (widget.isPostSignInJourney) {
           final fullName = SupabaseService.pendingOnboardingFullName ??
@@ -941,39 +952,6 @@ class _ConfirmLocationScreenState extends State<ConfirmLocationScreen> {
                               ),
                             ],
                           ),
-                          if (!_isWithinCoverage) ...[
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFDF3E6),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: const Row(
-                                children: [
-                                  Icon(
-                                    Icons.info_outline,
-                                    color: Color(0xFFB4791F),
-                                    size: 18,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      "We're not live here yet, but you can still save this address.",
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Color(0xFF8A5A12),
-                                        height: 1.3,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
                           const SizedBox(height: 16),
                           SizedBox(
                             width: double.infinity,

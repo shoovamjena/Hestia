@@ -1,0 +1,8 @@
+# Supabase local config (required for CLI deploy)
+project_id = "hestia"
+
+[functions.assign-professionals]
+verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = false

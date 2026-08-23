@@ -353,7 +353,11 @@ class _LocationSetupPageState extends State<_LocationSetupPage> {
         phone: SupabaseService.currentUserPhone.isNotEmpty
             ? SupabaseService.currentUserPhone
             : null,
-        address: address,
+        address: {
+          ...address,
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+        },
         withinCoverage: withinCoverage,
       ).timeout(
         const Duration(seconds: 15),

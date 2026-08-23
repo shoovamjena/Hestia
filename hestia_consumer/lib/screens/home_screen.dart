@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
+import '../config/mapbox_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import 'service_detail_screen.dart';
 import 'repeat_booking_screen.dart';
 import 'schedule_screen.dart';
-import 'tracking_screen.dart';
+import '../utils/active_booking_navigation.dart';
 import 'rate_session_screen.dart';
 import 'session_detail_screen.dart';
 import 'receipt_screen.dart';
@@ -32,10 +36,14 @@ class _HomeScreenState extends State<HomeScreen>
   String _phone = '';
   int _currentTabIndex = 0;
   int _oldTabIndex = 0;
+  int _heroPageIndex = 0;
   bool _isWithinCoverage = true;
+  String? _cancellingBookingId;
   bool _notifyRequested = false;
   final Map<String, int> _serviceMinutes = {};
   Map<String, dynamic>? _activeBooking;
+  int? _activeBookingEtaMin;
+  Timer? _activeBookingPollTimer;
   List<Map<String, dynamic>> _recentSessions = [];
   AnimationController? _navAnimationController;
   String _selectedSessionCategory = 'All';
@@ -109,10 +117,12 @@ class _HomeScreenState extends State<HomeScreen>
     if (fullWidth) {
       return LayoutBuilder(
         builder: (context, constraints) {
-          final boxHeight =
-              constraints.maxHeight.isFinite ? constraints.maxHeight : (height ?? 96);
-          final boxWidth =
-              constraints.maxWidth.isFinite ? constraints.maxWidth : double.infinity;
+          final boxHeight = constraints.maxHeight.isFinite
+              ? constraints.maxHeight
+              : (height ?? 96);
+          final boxWidth = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : double.infinity;
           final renderedImageHeight = boxHeight * imageHeightMultiplier;
 
           return ClipRect(
@@ -200,53 +210,68 @@ class _HomeScreenState extends State<HomeScreen>
     super.initState();
     _initAnimationController();
     _loadProfileData();
+    _activeBookingPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      _refreshActiveBookingQuietly();
+    });
   }
 
   @override
   void dispose() {
+    _activeBookingPollTimer?.cancel();
     _navAnimationController?.dispose();
     super.dispose();
   }
 
   Future<void> _loadProfileData() async {
     final user = SupabaseService.currentUser;
-    if (user != null) {
-      // Set defaults from Auth user metadata first
-      final metadataName = user.userMetadata?['full_name'] ?? 'User';
+    if (user == null) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+      return;
+    }
+
+    // Set defaults from Auth user metadata first
+    final metadataName = user.userMetadata?['full_name'] ?? 'User';
+    if (mounted) {
       setState(() {
         _userName = metadataName;
         _userInitials = _getInitials(metadataName);
         _email = SupabaseService.currentUserEmail;
         _phone = SupabaseService.currentUserPhone;
       });
+    }
 
-      Map<String, dynamic>? profileData;
-      Map<String, dynamic>? activeBooking;
-      List<Map<String, dynamic>> recent = [];
-      List<Map<String, dynamic>> upcoming = [];
+    Map<String, dynamic>? profileData;
+    Map<String, dynamic>? activeBooking;
+    List<Map<String, dynamic>> recent = [];
+    List<Map<String, dynamic>> upcoming = [];
 
-      try {
-        final results = await Future.wait<dynamic>([
-          () async {
-            var data = await SupabaseService.getUserProfile(user.id);
-            if (data == null || data['address'] == null) {
-              data = await SupabaseService.downloadProfileJson(user.id);
-            }
-            return data;
-          }(),
-          SupabaseService.getActiveBooking(user.id),
-          SupabaseService.getRecentSessions(user.id),
-          SupabaseService.getUpcomingBookings(user.id),
-        ]);
+    try {
+      // Resolve no-shows before loading upcoming, so lists stay in sync.
+      activeBooking = await SupabaseService.getActiveBooking(user.id)
+          .timeout(const Duration(seconds: 12), onTimeout: () => null);
+      final results = await Future.wait<dynamic>([
+        () async {
+          var data = await SupabaseService.getUserProfile(user.id);
+          if (data == null || data['address'] == null) {
+            data = await SupabaseService.downloadProfileJson(user.id);
+          }
+          return data;
+        }(),
+        SupabaseService.getRecentSessions(user.id),
+        SupabaseService.getUpcomingBookings(user.id),
+      ]).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => <dynamic>[null, <Map<String, dynamic>>[], <Map<String, dynamic>>[]],
+      );
 
-        profileData = results[0] as Map<String, dynamic>?;
-        activeBooking = results[1] as Map<String, dynamic>?;
-        recent = results[2] as List<Map<String, dynamic>>;
-        upcoming = results[3] as List<Map<String, dynamic>>;
-      } catch (e) {
-        debugPrint('Error loading home screen data: $e');
-      }
-
+      profileData = results[0] as Map<String, dynamic>?;
+      recent = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      upcoming = (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    } catch (e) {
+      debugPrint('Error loading home screen data: $e');
+    } finally {
       if (mounted) {
         setState(() {
           if (profileData != null) {
@@ -260,21 +285,144 @@ class _HomeScreenState extends State<HomeScreen>
               final city = profileData['address']['city'] ?? '';
               _location = street.isNotEmpty ? '$street · $city' : city;
               _isWithinCoverage =
-                  profileData['address']['zone_verified'] != false;
+                  profileData['address']['zone_verified'] == true;
             }
           }
           _activeBooking = activeBooking;
+          if (activeBooking == null ||
+              !isProfessionalOnTheWay(activeBooking)) {
+            _activeBookingEtaMin = null;
+          }
           _recentSessions = recent;
           _upcomingBookings = upcoming;
           _isLoading = false;
         });
       }
-      return;
     }
-    if (mounted) {
+
+    if (!mounted) return;
+
+    if (activeBooking != null && isProfessionalOnTheWay(activeBooking)) {
+      // Never block home render on ETA lookups.
+      unawaited(_refreshActiveBookingEta(activeBooking));
+    }
+
+    // Align home coverage with the same geo check assign-professionals uses
+    final addr = profileData?['address'] as Map<String, dynamic>?;
+    final lat = double.tryParse(addr?['latitude']?.toString() ?? '');
+    final lng = double.tryParse(addr?['longitude']?.toString() ?? '');
+    if (lat != null && lng != null) {
+      try {
+        final within = await SupabaseService.isPointWithinCoverage(lat, lng)
+            .timeout(const Duration(seconds: 6), onTimeout: () => _isWithinCoverage);
+        if (mounted && within != _isWithinCoverage) {
+          setState(() => _isWithinCoverage = within);
+        }
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _refreshActiveBookingQuietly() async {
+    final user = SupabaseService.currentUser;
+    if (user == null || !mounted) return;
+    try {
+      final activeBooking = await SupabaseService.getActiveBooking(user.id);
+      if (!mounted) return;
+      final previousId = _activeBooking?['booking_id']?.toString();
+      final nextId = activeBooking?['booking_id']?.toString();
+      final previousStatus = _activeBooking?['status']?.toString();
+      final nextStatus = activeBooking?['status']?.toString();
       setState(() {
-        _isLoading = false;
+        _activeBooking = activeBooking;
+        if (activeBooking == null ||
+            !isProfessionalOnTheWay(activeBooking)) {
+          _activeBookingEtaMin = null;
+        }
       });
+      if (activeBooking != null &&
+          isProfessionalOnTheWay(activeBooking) &&
+          (previousId != nextId ||
+              previousStatus != nextStatus ||
+              _activeBookingEtaMin == null)) {
+        _refreshActiveBookingEta(activeBooking);
+      }
+    } catch (_) {}
+  }
+
+  Future<Map<String, double>?> _geocodeAddressForEta(String address) async {
+    if (address.trim().isEmpty) return null;
+    HttpClient? client;
+    try {
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      final url =
+          'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(address)}.json?access_token=${MapboxConfig.accessToken}&limit=1';
+      final request = await client.getUrl(Uri.parse(url));
+      final response = await request.close().timeout(const Duration(seconds: 8));
+      final body = await response.transform(utf8.decoder).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final features = data['features'] as List?;
+      if (features == null || features.isEmpty) return null;
+      final center = (features.first as Map<String, dynamic>)['center'] as List?;
+      if (center == null || center.length < 2) return null;
+      return {
+        'lng': (center[0] as num).toDouble(),
+        'lat': (center[1] as num).toDouble(),
+      };
+    } catch (_) {
+      return null;
+    } finally {
+      client?.close(force: true);
+    }
+  }
+
+  Future<void> _refreshActiveBookingEta(Map<String, dynamic> booking) async {
+    final bookingId = booking['booking_id']?.toString();
+    final hubAddr = booking['hub_address']?.toString() ?? '';
+    final userAddr = booking['user_address']?.toString() ?? '';
+    if (hubAddr.isEmpty || userAddr.isEmpty) return;
+
+    // Prefer professional live location when available.
+    Map<String, double>? start;
+    final sessionId = booking['session_id']?.toString();
+    if (sessionId != null && sessionId.isNotEmpty) {
+      try {
+        final live = await SupabaseService.getLatestProfessionalLocation(
+          sessionId,
+          professionalId: booking['professional_id']?.toString(),
+        ).timeout(const Duration(seconds: 6), onTimeout: () => null);
+        if (live != null) {
+          start = {
+            'lat': live['latitude']!,
+            'lng': live['longitude']!,
+          };
+        }
+      } catch (_) {}
+    }
+    start ??= await _geocodeAddressForEta(hubAddr);
+    final end = await _geocodeAddressForEta(userAddr);
+    if (start == null || end == null) return;
+
+    HttpClient? client;
+    try {
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      final url =
+          'https://api.mapbox.com/directions/v5/mapbox/driving/${start['lng']},${start['lat']};${end['lng']},${end['lat']}?access_token=${MapboxConfig.accessToken}';
+      final request = await client.getUrl(Uri.parse(url));
+      final response = await request.close().timeout(const Duration(seconds: 8));
+      final body = await response.transform(utf8.decoder).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final routes = data['routes'] as List?;
+      if (routes == null || routes.isEmpty) return;
+      final durationSec =
+          (routes.first as Map<String, dynamic>)['duration'] as num?;
+      if (durationSec == null) return;
+      final minutes = (durationSec / 60.0).round().clamp(1, 999);
+      if (!mounted) return;
+      if (_activeBooking?['booking_id']?.toString() != bookingId) return;
+      setState(() => _activeBookingEtaMin = minutes);
+    } catch (_) {
+    } finally {
+      client?.close(force: true);
     }
   }
 
@@ -414,183 +562,189 @@ class _HomeScreenState extends State<HomeScreen>
         double.tryParse(originalPrice.replaceAll('₹', '').trim()) ?? 0.0;
     final displayPrice = isAdded
         ? '₹${(hourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}'
-        : '₹${hourlyPrice.toStringAsFixed(0)}/hr';
+        : '₹${hourlyPrice.toStringAsFixed(0)}';
     final displayOriginalPrice = isAdded
         ? '₹${(origHourlyPrice * (minutes / 60.0)).toStringAsFixed(0)}'
-        : '₹${origHourlyPrice.toStringAsFixed(0)}/hr';
-    return SizedBox(
-      width: 130,
-      height: double.infinity,
-      child: GestureDetector(
-        onTap: () => _openServiceDetail(label),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFEEE6DE)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Image area with rating badge
-              Expanded(
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: ClipRRect(
-                        borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(15),
-                        ),
-                        child: Container(
-                          color: const Color(0xFFBCA99B),
-                          alignment: Alignment.center,
-                          padding: const EdgeInsets.all(4),
-                          child: _buildServiceIconImage(label, size: 88),
-                        ),
+        : '₹${origHourlyPrice.toStringAsFixed(0)}';
+
+    Future<void> addService() async {
+      setState(() {
+        _serviceMinutes[label] = 30;
+      });
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      _openServiceDetail(label);
+    }
+
+    return GestureDetector(
+      onTap: () => _openServiceDetail(label),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFEEE6DE)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              height: 96,
+              width: double.infinity,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned.fill(
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(15),
                       ),
-                    ),
-                    Positioned(
-                      top: 8,
-                      left: 8,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.1),
-                              blurRadius: 4,
-                              offset: const Offset(0, 1),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.star,
-                              color: Color(0xFFFFB300),
-                              size: 11,
-                            ),
-                            const SizedBox(width: 2),
-                            Text(
-                              '$rating ($ratingCount)',
-                              style: const TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                color: HestiaColors.textDark,
-                              ),
-                            ),
-                          ],
-                        ),
+                        color: const Color(0xFFBCA99B),
+                        alignment: Alignment.center,
+                        child: _buildServiceIconImage(label, size: 264),
                       ),
                     ),
-                  ],
-                ),
-              ),
-              // Text + action area
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: HestiaColors.textDark,
+                  ),
+                  Positioned(
+                    top: 8,
+                    left: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 3,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          displayPrice,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
-                            color: HestiaColors.textDark,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.1),
+                            blurRadius: 4,
+                            offset: const Offset(0, 1),
                           ),
-                        ),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            displayOriginalPrice,
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.star,
+                            color: Color(0xFFFFB300),
+                            size: 11,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            '$rating ($ratingCount)',
                             style: const TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF9E9186),
-                              decoration: TextDecoration.lineThrough,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: HestiaColors.textDark,
                             ),
-                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_isWithinCoverage && !isAdded)
+                    Positioned(
+                      right: 8,
+                      bottom: -14,
+                      child: GestureDetector(
+                        onTap: () {
+                          addService();
+                        },
+                        child: Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: HestiaColors.primary,
+                              width: 1.6,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.add,
+                            color: HestiaColors.primary,
+                            size: 22,
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 8),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: isAdded
-                          ? _buildStepper(label, minutes)
-                          : GestureDetector(
-                              key: const ValueKey('add_btn'),
-                              onTap: () async {
-                                setState(() {
-                                  _serviceMinutes[label] = 30;
-                                });
-                                await Future.delayed(
-                                  const Duration(milliseconds: 300),
-                                );
-                                if (!mounted) return;
-                                _openServiceDetail(label);
-                              },
-                              child: Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: HestiaColors.primary,
-                                    width: 1.3,
-                                  ),
-                                ),
-                                child: const Center(
-                                  child: Text(
-                                    'ADD',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                      color: HestiaColors.primary,
-                                      letterSpacing: 0.5,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                    ),
-                  ],
-                ),
+                ],
               ),
-            ],
-          ),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                10,
+                _isWithinCoverage && !isAdded ? 14 : 6,
+                10,
+                8,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: HestiaColors.textDark,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        displayPrice,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: HestiaColors.textDark,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          displayOriginalPrice,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF9E9186),
+                            decoration: TextDecoration.lineThrough,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_isWithinCoverage && isAdded) ...[
+                    const SizedBox(height: 8),
+                    _buildStepper(label, minutes),
+                  ],
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -602,6 +756,7 @@ class _HomeScreenState extends State<HomeScreen>
         builder: (context) => ServiceDetailScreen(
           serviceKey: label,
           initialServicesMap: Map<String, int>.from(_serviceMinutes),
+          bookingEnabled: _isWithinCoverage,
           onMinutesChanged: (newMinutes) {
             setState(() {
               if (newMinutes <= 0) {
@@ -978,113 +1133,104 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildBookingsTab() {
-    return Container(
-      color: HestiaColors.appBackground,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          title: const Text(
-            'My Bookings',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: HestiaColors.textDark,
-            ),
-          ),
-          centerTitle: true,
-        ),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Segmented Control Toggle
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 24.0,
-                vertical: 8.0,
-              ),
-              child: Container(
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: Row(
+    return Scaffold(
+      backgroundColor: const Color(0xFFF3F2F0),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            color: HestiaColors.primary,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _bookingsSubTab = 0;
-                          });
-                        },
-                        behavior: HitTestBehavior.opaque,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: _bookingsSubTab == 0
-                                ? Colors.white
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(22),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            'Upcoming',
-                            style: TextStyle(
-                              color: _bookingsSubTab == 0
-                                  ? HestiaColors.primary
-                                  : Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
+                    const Text(
+                      'My Bookings',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
                       ),
                     ),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _bookingsSubTab = 1;
-                          });
-                        },
-                        behavior: HitTestBehavior.opaque,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: _bookingsSubTab == 1
-                                ? Colors.white
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(22),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(
-                            'History',
-                            style: TextStyle(
-                              color: _bookingsSubTab == 1
-                                  ? HestiaColors.primary
-                                  : Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                    const SizedBox(height: 4),
+                    Text(
+                      _bookingsSubTab == 0
+                          ? 'Upcoming care visits'
+                          : 'Past sessions & reviews',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      height: 44,
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _bookingsSegmentButton(
+                              label: 'Upcoming',
+                              selected: _bookingsSubTab == 0,
+                              onTap: () => setState(() => _bookingsSubTab = 0),
                             ),
                           ),
-                        ),
+                          Expanded(
+                            child: _bookingsSegmentButton(
+                              label: 'History',
+                              selected: _bookingsSubTab == 1,
+                              onTap: () => setState(() => _bookingsSubTab = 1),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 8),
-            // Expanded content based on selected segment
-            Expanded(
-              child: _bookingsSubTab == 0
-                  ? _buildUpcomingView()
-                  : _buildHistoryView(),
-            ),
-          ],
+          ),
+          Expanded(
+            child: _bookingsSubTab == 0
+                ? _buildUpcomingView()
+                : _buildHistoryView(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bookingsSegmentButton({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? HestiaColors.primary : Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+          ),
         ),
       ),
     );
@@ -1093,37 +1239,48 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildUpcomingView() {
     if (_upcomingBookings.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: HestiaColors.primary.withValues(alpha: 0.08),
-                shape: BoxShape.circle,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(32, 0, 32, 100),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFAF2EB),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: HestiaColors.primary.withValues(alpha: 0.15),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.calendar_today_rounded,
+                  color: HestiaColors.primary,
+                  size: 34,
+                ),
               ),
-              child: const Icon(
-                Icons.calendar_today_rounded,
-                color: HestiaColors.primary,
-                size: 32,
+              const SizedBox(height: 18),
+              const Text(
+                'No upcoming bookings',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                  color: HestiaColors.textDark,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'No upcoming bookings',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: HestiaColors.textDark,
+              const SizedBox(height: 8),
+              Text(
+                'Book a care visit from Home and it will show up here.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: Colors.grey.shade600,
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Book a care visit from the Home screen.',
-              style: TextStyle(fontSize: 13, color: HestiaColors.textMedium),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
@@ -1133,14 +1290,9 @@ class _HomeScreenState extends State<HomeScreen>
       color: HestiaColors.primary,
       child: ListView.separated(
         physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(
-          24,
-          8,
-          24,
-          120,
-        ), // padded to avoid floating navbar
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
         itemCount: _upcomingBookings.length,
-        separatorBuilder: (context, index) => const SizedBox(height: 14),
+        separatorBuilder: (context, index) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
           final booking = _upcomingBookings[index];
           return _buildUpcomingCard(booking);
@@ -1158,8 +1310,8 @@ class _HomeScreenState extends State<HomeScreen>
     final totalAmount = booking['amount'] != null
         ? (booking['amount'] as num).toInt()
         : 0;
+    final bookingId = booking['booking_id']?.toString() ?? '';
 
-    // Check if date is today/tomorrow
     final now = DateTime.now();
     final isToday =
         start.year == now.year &&
@@ -1177,53 +1329,66 @@ class _HomeScreenState extends State<HomeScreen>
         ? 'Tomorrow'
         : _formatBookingDate(start);
     final String timeStr = _formatBookingTime(start);
-
-    // Service icon from PNG asset
     final String iconTitle = title;
 
-    // Status styling
     Color statusBgColor;
     Color statusTextColor;
     String statusLabel = status.toUpperCase();
+    final runningLate = isProfessionalRunningLateForBooking(booking);
+    final isNoShow = isNoShowBooking(booking);
+    final canCancel = _canCancelUpcomingBooking(status, isNoShow);
+    final isCancellingThis = _cancellingBookingId == bookingId;
 
-    if (status == 'active') {
+    if (isNoShow) {
+      statusBgColor = const Color(0xFFFDECEA);
+      statusTextColor = const Color(0xFFC0392B);
+      statusLabel = 'NO SHOW';
+    } else if (runningLate) {
+      statusBgColor = const Color(0xFFFFF3E0);
+      statusTextColor = const Color(0xFFE65100);
+      statusLabel = 'RUNNING LATE';
+    } else if (status == 'active' ||
+        status == 'in_progress' ||
+        status == 'arrived') {
       statusBgColor = const Color(0xFFE8F5ED);
       statusTextColor = const Color(0xFF2E6B4A);
       statusLabel = 'ACTIVE NOW';
-    } else if (status == 'confirmed') {
-      statusBgColor = const Color(0xFFE3F2FD);
-      statusTextColor = const Color(0xFF1E88E5);
-      statusLabel = 'CONFIRMED';
+    } else if (status == 'confirmed' ||
+        status == 'scheduled' ||
+        status == 'departed' ||
+        status == 'transit') {
+      statusBgColor = const Color(0xFFFAF2EB);
+      statusTextColor = HestiaColors.primary;
+      statusLabel = status == 'departed' || status == 'transit'
+          ? 'ON THE WAY'
+          : 'CONFIRMED';
     } else {
-      statusBgColor = const Color(0xFFFFF3E0);
-      statusTextColor = const Color(0xFFE65100);
+      statusBgColor = const Color(0xFFFAF2EB);
+      statusTextColor = HestiaColors.mutedBrown;
       statusLabel = 'PENDING';
     }
 
     return GestureDetector(
       onTap: () {
-        Navigator.of(context)
-            .push(
-              MaterialPageRoute(
-                builder: (context) => TrackingScreen(bookingData: booking),
-              ),
-            )
-            .then((_) => _loadProfileData());
+        openActiveBookingScreen(
+          context,
+          booking: booking,
+          userName: _userName,
+        ).then((_) => _loadProfileData());
       },
       child: Container(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: const Color(0xFF8C6239).withValues(alpha: 0.18),
-            width: 3.0,
+            color: HestiaColors.primary.withValues(alpha: 0.14),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
             ),
           ],
         ),
@@ -1232,16 +1397,14 @@ class _HomeScreenState extends State<HomeScreen>
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Icon
                 _buildServiceIconBadge(iconTitle),
                 const SizedBox(width: 14),
-                // Text details
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Expanded(
                             child: Text(
@@ -1249,15 +1412,16 @@ class _HomeScreenState extends State<HomeScreen>
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 fontSize: 15,
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w800,
                                 color: HestiaColors.textDark,
                               ),
                             ),
                           ),
+                          const SizedBox(width: 8),
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 8,
-                              vertical: 3,
+                              vertical: 4,
                             ),
                             decoration: BoxDecoration(
                               color: statusBgColor,
@@ -1267,28 +1431,47 @@ class _HomeScreenState extends State<HomeScreen>
                               statusLabel,
                               style: TextStyle(
                                 fontSize: 10,
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.3,
                                 color: statusTextColor,
                               ),
                             ),
                           ),
                         ],
                       ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.schedule_rounded,
+                            size: 14,
+                            color: Colors.grey.shade600,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '$dateStr · $timeStr',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey.shade800,
+                            ),
+                          ),
+                        ],
+                      ),
                       const SizedBox(height: 4),
                       Text(
-                        '$dateStr at $timeStr',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: HestiaColors.textDark,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Professional: $caregiverName',
-                        style: const TextStyle(
+                        runningLate
+                            ? professionalRunningLateMessage(
+                                caregiverName?.toString(),
+                              )
+                            : 'Professional: $caregiverName',
+                        style: TextStyle(
                           fontSize: 12,
-                          color: HestiaColors.textMedium,
+                          color: runningLate
+                              ? const Color(0xFF8D4E00)
+                              : Colors.grey.shade600,
+                          fontWeight:
+                              runningLate ? FontWeight.w600 : FontWeight.w400,
                         ),
                       ),
                     ],
@@ -1296,27 +1479,59 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            const Divider(color: Color(0xFFF5EBE0), height: 1, thickness: 1.2),
+            const SizedBox(height: 14),
+            Divider(color: const Color(0xFFF0E6DC), height: 1, thickness: 1),
             const SizedBox(height: 12),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Amount: ₹$totalAmount',
+                  '₹$totalAmount',
                   style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
                     color: HestiaColors.textDark,
                   ),
                 ),
+                const Spacer(),
+                if (canCancel) ...[
+                  GestureDetector(
+                    onTap: isCancellingThis
+                        ? null
+                        : () => _confirmAndCancelUpcomingBooking(booking),
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      child: Text(
+                        isCancellingThis ? 'Cancelling…' : 'Cancel',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: isCancellingThis
+                              ? Colors.grey.shade500
+                              : const Color(0xFFC0392B),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 Row(
                   children: [
                     Text(
-                      status == 'active' ? 'Track Care' : 'View Details',
+                      isNoShow
+                          ? 'Leave review'
+                          : status == 'active' ||
+                                  status == 'departed' ||
+                                  status == 'transit' ||
+                                  status == 'en_route'
+                              ? 'Track care'
+                              : 'View details',
                       style: const TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w800,
                         color: HestiaColors.primary,
                       ),
                     ),
@@ -1324,7 +1539,7 @@ class _HomeScreenState extends State<HomeScreen>
                     const Icon(
                       Icons.chevron_right_rounded,
                       color: HestiaColors.primary,
-                      size: 16,
+                      size: 18,
                     ),
                   ],
                 ),
@@ -1334,6 +1549,125 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
     );
+  }
+
+  bool _canCancelUpcomingBooking(String status, bool isNoShow) {
+    if (isNoShow) return false;
+    final s = status.trim().toLowerCase();
+    // Once care has started, consumer should End Session instead.
+    if (s == 'active' ||
+        s == 'in_progress' ||
+        s == 'started' ||
+        s == 'arrived' ||
+        s == 'completed' ||
+        s == 'cancelled' ||
+        s == 'unattended' ||
+        s == 'no_show') {
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _confirmAndCancelUpcomingBooking(
+    Map<String, dynamic> booking,
+  ) async {
+    final bookingId = booking['booking_id']?.toString() ?? '';
+    if (bookingId.isEmpty || _cancellingBookingId != null) return;
+
+    final status = (booking['status']?.toString() ?? '').trim().toLowerCase();
+    if (!_canCancelUpcomingBooking(status, isNoShowBooking(booking))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This booking can no longer be cancelled.'),
+          backgroundColor: Color(0xFFC0392B),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: HestiaColors.background,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: const Text(
+            'Cancel booking?',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              color: HestiaColors.textDark,
+            ),
+          ),
+          content: const Text(
+            'This will cancel your Instant or Scheduled booking for both you and the professional. This cannot be undone.',
+            style: TextStyle(
+              color: HestiaColors.textMedium,
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text(
+                'Keep booking',
+                style: TextStyle(
+                  color: HestiaColors.textMedium,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text(
+                'Cancel booking',
+                style: TextStyle(
+                  color: Color(0xFFC0392B),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _cancellingBookingId = bookingId);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: HestiaColors.primary),
+      ),
+    );
+
+    try {
+      await SupabaseService.cancelBookingByClient(bookingId: bookingId);
+      if (!mounted) return;
+      Navigator.of(context).pop(); // loading
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Booking cancelled successfully.'),
+          backgroundColor: HestiaColors.primary,
+        ),
+      );
+      await _loadProfileData();
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // loading
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to cancel booking: $e'),
+          backgroundColor: const Color(0xFFC0392B),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _cancellingBookingId = null);
+    }
   }
 
   Widget _buildHistoryView() {
@@ -1357,20 +1691,21 @@ class _HomeScreenState extends State<HomeScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Search Bar
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: Container(
             height: 48,
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: Colors.white24),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: HestiaColors.primary.withValues(alpha: 0.16),
+              ),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(
               children: [
-                const Icon(Icons.search, color: Colors.white70, size: 20),
+                Icon(Icons.search_rounded, color: Colors.grey.shade500, size: 20),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
@@ -1379,12 +1714,21 @@ class _HomeScreenState extends State<HomeScreen>
                         _sessionSearchQuery = val.toLowerCase();
                       });
                     },
-                    style: const TextStyle(fontSize: 14, color: Colors.white),
-                    decoration: const InputDecoration(
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: HestiaColors.textDark,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    cursorColor: HestiaColors.primary,
+                    decoration: InputDecoration(
                       hintText: 'Search sessions',
-                      hintStyle: TextStyle(color: Colors.white70, fontSize: 14),
+                      hintStyle: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontSize: 14,
+                      ),
                       border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 2.0),
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
                 ),
@@ -1392,16 +1736,13 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
         ),
-
         const SizedBox(height: 12),
-
-        // Horizontal Categories filter
         SizedBox(
           height: 38,
           child: ListView(
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             children: ['All', 'Post-Delivery', 'Mobility', 'Babysitting'].map((
               cat,
             ) {
@@ -1415,19 +1756,16 @@ class _HomeScreenState extends State<HomeScreen>
                 child: Container(
                   margin: const EdgeInsets.only(right: 8),
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 18,
+                    horizontal: 16,
                     vertical: 8,
                   ),
                   decoration: BoxDecoration(
-                    color: isSelected
-                        ? Colors.white
-                        : Colors.white.withValues(alpha: 0.15),
+                    color: isSelected ? HestiaColors.primary : Colors.white,
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(
                       color: isSelected
-                          ? Colors.white
-                          : Colors.white.withValues(alpha: 0.2),
-                      width: 1.2,
+                          ? HestiaColors.primary
+                          : HestiaColors.primary.withValues(alpha: 0.16),
                     ),
                   ),
                   child: Center(
@@ -1435,8 +1773,8 @@ class _HomeScreenState extends State<HomeScreen>
                       cat,
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: isSelected ? HestiaColors.primary : Colors.white,
+                        fontWeight: FontWeight.w700,
+                        color: isSelected ? Colors.white : HestiaColors.primary,
                       ),
                     ),
                   ),
@@ -1445,10 +1783,7 @@ class _HomeScreenState extends State<HomeScreen>
             }).toList(),
           ),
         ),
-
-        const SizedBox(height: 20),
-
-        // Sessions Card List
+        const SizedBox(height: 14),
         Expanded(
           child: RefreshIndicator(
             onRefresh: _loadProfileData,
@@ -1456,21 +1791,24 @@ class _HomeScreenState extends State<HomeScreen>
             child: filteredSessions.isNotEmpty
                 ? ListView.separated(
                     physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.fromLTRB(
-                      24.0,
-                      0.0,
-                      24.0,
-                      120.0,
-                    ), // spacer for floating nav
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
                     itemCount: filteredSessions.length,
                     separatorBuilder: (context, index) =>
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 12),
                     itemBuilder: (context, index) {
                       final session = filteredSessions[index];
                       return _buildSessionCard(session);
                     },
                   )
-                : _buildNoSessionsState(),
+                : ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.45,
+                        child: _buildNoSessionsState(),
+                      ),
+                    ],
+                  ),
           ),
         ),
       ],
@@ -1562,19 +1900,18 @@ class _HomeScreenState extends State<HomeScreen>
             });
       },
       child: Container(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: const Color(0xFF8C6239).withValues(alpha: 0.18),
-            width: 3.0,
+            color: HestiaColors.primary.withValues(alpha: 0.14),
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
             ),
           ],
         ),
@@ -1594,12 +1931,15 @@ class _HomeScreenState extends State<HomeScreen>
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(
-                            displayTitle,
-                            style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: HestiaColors.textDark,
+                          Expanded(
+                            child: Text(
+                              displayTitle,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: HestiaColors.textDark,
+                              ),
                             ),
                           ),
                           // Rating Stars
@@ -1620,9 +1960,9 @@ class _HomeScreenState extends State<HomeScreen>
                       const SizedBox(height: 4),
                       Text(
                         subtitle,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: HestiaColors.textMedium,
+                          color: Colors.grey.shade600,
                         ),
                       ),
                     ],
@@ -1631,9 +1971,9 @@ class _HomeScreenState extends State<HomeScreen>
               ],
             ),
 
-            const SizedBox(height: 16),
-            const Divider(color: Color(0xFFF5EBE0), height: 1, thickness: 1.2),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
+            const Divider(color: Color(0xFFF0E6DC), height: 1, thickness: 1),
+            const SizedBox(height: 12),
 
             // Completed badge and Rebook buttons
             Row(
@@ -1653,7 +1993,7 @@ class _HomeScreenState extends State<HomeScreen>
                     session['status'] == 'no_show' ? 'No-Show' : 'Completed',
                     style: TextStyle(
                       fontSize: 11,
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w800,
                       color: session['status'] == 'no_show'
                           ? const Color(0xFFB94A4A)
                           : const Color(0xFF2E6B4A),
@@ -1663,9 +2003,9 @@ class _HomeScreenState extends State<HomeScreen>
                 const SizedBox(width: 8),
                 Text(
                   durationStr,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: HestiaColors.textLight,
+                    color: Colors.grey.shade600,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -1691,23 +2031,19 @@ class _HomeScreenState extends State<HomeScreen>
                   },
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
+                      horizontal: 16,
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: const Color(0xFFE5D5C5),
-                        width: 1.2,
-                      ),
+                      color: HestiaColors.primary,
+                      borderRadius: BorderRadius.circular(20),
                     ),
                     child: const Text(
                       'Rebook',
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: HestiaColors.textMedium,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
                       ),
                     ),
                   ),
@@ -1717,7 +2053,7 @@ class _HomeScreenState extends State<HomeScreen>
 
             // Unrated / view receipt links
             Padding(
-              padding: const EdgeInsets.only(top: 14.0),
+              padding: const EdgeInsets.only(top: 12),
               child: Row(
                 children: [
                   if (!isRated) ...[
@@ -1738,8 +2074,8 @@ class _HomeScreenState extends State<HomeScreen>
                         'Rate this session',
                         style: TextStyle(
                           fontSize: 12,
-                          color: Color(0xFF8C6239),
-                          fontWeight: FontWeight.bold,
+                          color: HestiaColors.primary,
+                          fontWeight: FontWeight.w800,
                           decoration: TextDecoration.underline,
                         ),
                       ),
@@ -1755,12 +2091,12 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                       );
                     },
-                    child: const Text(
+                    child: Text(
                       'View receipt',
                       style: TextStyle(
                         fontSize: 12,
-                        color: HestiaColors.textMedium,
-                        fontWeight: FontWeight.bold,
+                        color: Colors.grey.shade700,
+                        fontWeight: FontWeight.w700,
                         decoration: TextDecoration.underline,
                       ),
                     ),
@@ -1978,51 +2314,121 @@ class _HomeScreenState extends State<HomeScreen>
       ),
       const SizedBox(height: 16),
       _buildServicesGrid(),
-      const SizedBox(
-        height: 120,
-      ),
+      const SizedBox(height: 120),
     ];
   }
 
-  Widget _buildServicesGrid({double desiredHeight = 220}) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final double totalWidth = constraints.maxWidth;
-        final double columnWidth = (totalWidth - 20.0) / 3;
-        final double aspect = columnWidth / desiredHeight;
+  Widget _buildServicesGrid() {
+    final services = _homeServiceCatalog;
+    const crossAxisCount = 3;
+    const spacing = 10.0;
 
-        return GridView.count(
-          crossAxisCount: 3,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: aspect,
-          children: _homeServiceCatalog
-              .map(
-                (service) => _serviceTile(
-                  service.label,
-                  service.price,
-                  service.originalPrice,
-                  service.rating,
-                  service.ratingCount,
-                ),
-              )
-              .toList(),
-        );
-      },
+    final rows = <Widget>[];
+    for (var i = 0; i < services.length; i += crossAxisCount) {
+      final rowItems = services.skip(i).take(crossAxisCount).toList();
+      rows.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var j = 0; j < crossAxisCount; j++) ...[
+              if (j > 0) const SizedBox(width: spacing),
+              Expanded(
+                child: j < rowItems.length
+                    ? _serviceTile(
+                        rowItems[j].label,
+                        rowItems[j].price,
+                        rowItems[j].originalPrice,
+                        rowItems[j].rating,
+                        rowItems[j].ratingCount,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
+          ],
+        ),
+      );
+      if (i + crossAxisCount < services.length) {
+        rows.add(const SizedBox(height: spacing));
+      }
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: rows,
     );
   }
 
   Widget _buildActiveBookingBanner() {
     final booking = _activeBooking!;
+    final isNoShow = isNoShowBooking(booking);
+    final onTheWay = !isNoShow && isProfessionalOnTheWay(booking);
+    final undergoing = !isNoShow && !onTheWay && isSessionUndergoing(booking);
+    final runningLate = !isNoShow &&
+        !onTheWay &&
+        !undergoing &&
+        isProfessionalRunningLateForBooking(booking);
+    final caregiverName = booking['caregiver_name']?.toString();
+    final scheduledStart = booking['scheduled_start'] is DateTime
+        ? booking['scheduled_start'] as DateTime
+        : DateTime.tryParse(booking['scheduled_start']?.toString() ?? '') ??
+            DateTime.now();
+
+    final accent = isNoShow
+        ? const Color(0xFFC0392B)
+        : undergoing
+            ? const Color(0xFF2E6B4A)
+            : runningLate
+                ? const Color(0xFFE65100)
+                : HestiaColors.primary;
+    final accentSoft = isNoShow
+        ? const Color(0xFFFDECEA)
+        : undergoing
+            ? const Color(0xFFE8F5ED)
+            : runningLate
+                ? const Color(0xFFFFF3E0)
+                : const Color(0xFFFAF2EB);
+    final label = isNoShow
+        ? 'NO SHOW'
+        : undergoing
+            ? 'SESSION UNDERWAY'
+            : onTheWay
+                ? 'ON THE WAY'
+                : runningLate
+                    ? 'RUNNING LATE'
+                    : 'ACTIVE BOOKING';
+
+    final headline = isNoShow
+        ? 'Session marked as no-show'
+        : undergoing
+            ? '${professionalFirstName(caregiverName)} is with you now'
+            : onTheWay
+                ? professionalOnTheWayMessage(caregiverName)
+                : runningLate
+                    ? professionalRunningLateMessage(caregiverName)
+                    : '${booking['title']} · ${_formatBookingDate(scheduledStart)}';
+
+    final etaLabel = _activeBookingEtaMin != null
+        ? 'ETA $_activeBookingEtaMin min'
+        : 'ETA updating…';
+
+    final subtitle = isNoShow
+        ? 'Tap to leave a review'
+        : undergoing
+            ? '${booking['title']} · started ${_formatBookingTime(scheduledStart)}'
+            : onTheWay
+                ? '$etaLabel · ${booking['title']} · ${_formatBookingTime(scheduledStart)}'
+                : runningLate
+                    ? '${booking['title']} · ${_formatBookingTime(scheduledStart)}'
+                    : '${booking['caregiver_name']} · ${_formatBookingTime(scheduledStart)}';
+
     return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => TrackingScreen(bookingData: booking),
-          ),
+      onTap: () async {
+        await openActiveBookingScreen(
+          context,
+          booking: booking,
+          userName: _userName,
         );
+        if (mounted) _loadProfileData();
       },
       child: Container(
         width: double.infinity,
@@ -2030,7 +2436,7 @@ class _HomeScreenState extends State<HomeScreen>
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: HestiaColors.primary.withValues(alpha: 0.25),
+            color: accent.withValues(alpha: 0.35),
           ),
           boxShadow: const [
             BoxShadow(
@@ -2040,161 +2446,813 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ],
         ),
-        child: Row(
-          children: [
-            Container(
-              width: 5,
-              height: 88,
-              decoration: const BoxDecoration(
-                color: HestiaColors.primary,
-                borderRadius: BorderRadius.horizontal(
-                  left: Radius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: 5,
+                color: accent,
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: accentSoft,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          isNoShow
+                              ? Icons.person_off_rounded
+                              : undergoing
+                                  ? Icons.play_circle_fill_rounded
+                                  : onTheWay
+                                      ? Icons.directions_car_rounded
+                                      : runningLate
+                                          ? Icons.schedule_rounded
+                                          : Icons.health_and_safety,
+                          color: accent,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              label,
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: isNoShow ||
+                                        runningLate ||
+                                        onTheWay ||
+                                        undergoing
+                                    ? accent
+                                    : HestiaColors.textAccent,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1.1,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              headline,
+                              style: TextStyle(
+                                color: HestiaColors.textDark,
+                                fontWeight: FontWeight.w800,
+                                fontSize: onTheWay ||
+                                        runningLate ||
+                                        undergoing
+                                    ? 17
+                                    : 14,
+                                height: 1.2,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (onTheWay) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                etaLabel,
+                                style: TextStyle(
+                                  color: accent,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${booking['title']} · ${_formatBookingTime(scheduledStart)}',
+                                style: TextStyle(
+                                  color: Colors.grey.shade600,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ] else ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                subtitle,
+                                style: TextStyle(
+                                  color: isNoShow || runningLate || undergoing
+                                      ? accent
+                                      : HestiaColors.textMedium,
+                                  fontSize: 12,
+                                  fontWeight: isNoShow ||
+                                          runningLate ||
+                                          undergoing
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        Icons.chevron_right,
+                        color: accent,
+                      ),
+                    ],
+                  ),
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveSessionFocusPanel() {
+    final booking = _activeBooking!;
+    final isNoShow = isNoShowBooking(booking);
+    final onTheWay = !isNoShow && isProfessionalOnTheWay(booking);
+    final undergoing = !isNoShow && isSessionUndergoing(booking);
+    final arrived = !isNoShow &&
+        !onTheWay &&
+        !undergoing &&
+        booking['status']?.toString().toLowerCase() == 'arrived';
+    final caregiverName = booking['caregiver_name']?.toString();
+    final firstName = professionalFirstName(caregiverName);
+    final title = booking['title']?.toString() ?? 'Care session';
+    final scheduledStart = booking['scheduled_start'] is DateTime
+        ? booking['scheduled_start'] as DateTime
+        : DateTime.tryParse(booking['scheduled_start']?.toString() ?? '') ??
+            DateTime.now();
+
+    final accent = isNoShow
+        ? const Color(0xFFC0392B)
+        : undergoing
+            ? const Color(0xFF2E6B4A)
+            : HestiaColors.primary;
+    final soft = isNoShow
+        ? const Color(0xFFFDECEA)
+        : undergoing
+            ? const Color(0xFFE8F5ED)
+            : const Color(0xFFFAF2EB);
+
+    final badge = isNoShow
+        ? 'NO SHOW'
+        : undergoing
+            ? 'SESSION UNDERWAY'
+            : onTheWay
+                ? 'ON THE WAY'
+                : arrived
+                    ? 'ARRIVED'
+                    : 'ACTIVE SESSION';
+
+    final headline = isNoShow
+        ? 'This session needs your review'
+        : undergoing
+            ? 'Your session is underway'
+            : onTheWay
+                ? professionalOnTheWayMessage(caregiverName)
+                : arrived
+                    ? '$firstName has arrived'
+                    : '$firstName is assigned for your care';
+
+    final support = isNoShow
+        ? 'Tap below to leave feedback and close this booking.'
+        : undergoing
+            ? '$firstName is currently providing $title.'
+            : onTheWay
+                ? (_activeBookingEtaMin != null
+                    ? 'ETA $_activeBookingEtaMin min · $title'
+                    : 'Live tracking available · $title')
+                : arrived
+                    ? 'Verify arrival to start the care session.'
+                    : '$title · ${_formatBookingDate(scheduledStart)} · ${_formatBookingTime(scheduledStart)}';
+
+    final cta = isNoShow
+        ? 'Leave a review'
+        : undergoing
+            ? 'Open active session'
+            : onTheWay
+                ? 'Track professional'
+                : arrived
+                    ? 'Verify & start'
+                    : 'View active session';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: accent.withValues(alpha: 0.28)),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: 0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: soft,
+              borderRadius: BorderRadius.circular(999),
             ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
-                child: Row(
+            child: Text(
+              badge,
+              style: TextStyle(
+                color: accent,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: soft,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isNoShow
+                      ? Icons.rate_review_rounded
+                      : undergoing
+                          ? Icons.play_circle_fill_rounded
+                          : onTheWay
+                              ? Icons.directions_car_rounded
+                              : Icons.health_and_safety_rounded,
+                  color: accent,
+                  size: 30,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFAF2EB),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.health_and_safety,
-                        color: HestiaColors.primary,
-                        size: 24,
+                    Text(
+                      headline,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        color: HestiaColors.textDark,
+                        height: 1.2,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'ACTIVE BOOKING',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: HestiaColors.textAccent,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.1,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${booking['title']} · ${_formatBookingDate(booking['scheduled_start'] as DateTime)}',
-                            style: const TextStyle(
-                              color: HestiaColors.textDark,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${booking['caregiver_name']} · ${_formatBookingTime(booking['scheduled_start'] as DateTime)}',
-                            style: const TextStyle(
-                              color: HestiaColors.textMedium,
-                              fontSize: 12,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
+                    const SizedBox(height: 8),
+                    Text(
+                      support,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: HestiaColors.textMedium,
+                        height: 1.4,
+                        fontWeight: FontWeight.w500,
                       ),
-                    ),
-                    const Icon(
-                      Icons.chevron_right,
-                      color: HestiaColors.primary,
                     ),
                   ],
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF7F3EF),
+              borderRadius: BorderRadius.circular(16),
             ),
+            child: Column(
+              children: [
+                _sessionFocusMetaRow(
+                  Icons.person_outline_rounded,
+                  'Professional',
+                  firstName,
+                ),
+                const SizedBox(height: 10),
+                _sessionFocusMetaRow(
+                  Icons.medical_services_outlined,
+                  'Service',
+                  title,
+                ),
+                const SizedBox(height: 10),
+                _sessionFocusMetaRow(
+                  Icons.schedule_rounded,
+                  undergoing ? 'Started' : 'Scheduled',
+                  _formatBookingTime(scheduledStart),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 18),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton(
+              onPressed: () async {
+                await openActiveBookingScreen(
+                  context,
+                  booking: booking,
+                  userName: _userName,
+                );
+                if (mounted) _loadProfileData();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accent,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              child: Text(
+                cta,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'New bookings are paused while this session is active.',
+            style: TextStyle(
+              fontSize: 12.5,
+              color: HestiaColors.textMedium,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sessionFocusMetaRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: HestiaColors.primary),
+        const SizedBox(width: 10),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12.5,
+            color: HestiaColors.textMedium,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const Spacer(),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              fontSize: 13.5,
+              color: HestiaColors.textDark,
+              fontWeight: FontWeight.w800,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPromoHero() {
+    final slides = [
+      (
+        title: 'First 3 bookings at just ',
+        highlight: '₹25*',
+        titleSuffix: ' each',
+        subtitle: 'Families trust Hestia for safe, reliable care at home.',
+        cta: 'BOOK NOW',
+      ),
+      (
+        title: 'Verified professionals ',
+        highlight: 'you can trust',
+        titleSuffix: '',
+        subtitle: 'Background-checked caregivers for every booking.',
+        cta: 'EXPLORE',
+      ),
+      (
+        title: 'Safe care, ',
+        highlight: 'every time',
+        titleSuffix: '',
+        subtitle: 'Consistent, trained, and reliable home care support.',
+        cta: 'BOOK NOW',
+      ),
+    ];
+
+    return Column(
+      children: [
+        SizedBox(
+          height: 190,
+          child: PageView.builder(
+            itemCount: slides.length,
+            onPageChanged: (index) {
+              setState(() => _heroPageIndex = index);
+            },
+            itemBuilder: (context, index) {
+              final slide = slides[index];
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xFF4E3626),
+                      HestiaColors.primary,
+                      Color(0xFF8B6B4A),
+                    ],
+                  ),
+                ),
+                child: Stack(
+                  children: [
+                    Positioned(
+                      right: -20,
+                      bottom: -30,
+                      child: Icon(
+                        Icons.favorite_rounded,
+                        size: 160,
+                        color: Colors.white.withValues(alpha: 0.08),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          RichText(
+                            text: TextSpan(
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                height: 1.2,
+                              ),
+                              children: [
+                                TextSpan(text: slide.title),
+                                TextSpan(
+                                  text: slide.highlight,
+                                  style: const TextStyle(
+                                    color: Color(0xFFF5D9A8),
+                                  ),
+                                ),
+                                TextSpan(text: slide.titleSuffix),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            slide.subtitle,
+                            style: TextStyle(
+                              fontSize: 13,
+                              height: 1.35,
+                              color: Colors.white.withValues(alpha: 0.85),
+                            ),
+                          ),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () {
+                              final first = _homeServiceCatalog.first.label;
+                              _openServiceDetail(first);
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                slide.cta,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: HestiaColors.primary,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(slides.length, (index) {
+            final active = index == _heroPageIndex;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              width: active ? 16 : 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: active
+                    ? HestiaColors.primary
+                    : HestiaColors.primary.withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBrandBlock() {
+    return const SizedBox(
+      width: double.infinity,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            'Safe Home.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 34,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFFBCA99B),
+              height: 1.05,
+            ),
+          ),
+          Text(
+            'Zero Stress.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 34,
+              fontWeight: FontWeight.w900,
+              color: HestiaColors.textDark,
+              height: 1.05,
+            ),
+          ),
+          Text(
+            'Hestia',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 40,
+              fontWeight: FontWeight.w900,
+              color: HestiaColors.primary,
+              height: 1.1,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            'Trusted by families like yours',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: HestiaColors.textMedium),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTrustBadgesRow() {
+    Widget badge(IconData icon, String label) {
+      return Expanded(
+        child: Column(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(
+                color: Color(0xFFFAF2EB),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: HestiaColors.primary, size: 20),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade700,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F5F5),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          children: [
+            badge(Icons.verified_user_outlined, 'Verified'),
+            VerticalDivider(color: Colors.grey.shade300, width: 1),
+            badge(Icons.handshake_outlined, 'Trained'),
+            VerticalDivider(color: Colors.grey.shade300, width: 1),
+            badge(Icons.timer_outlined, 'Reliable'),
           ],
         ),
       ),
     );
   }
 
-  List<Widget> _buildInCoverageContent() {
-    return [
-      if (_activeBooking != null) ...[
-        _buildActiveBookingBanner(),
-        const SizedBox(height: 24),
-      ],
-      const SizedBox(height: 12),
-      Center(
-        child: RichText(
-          textAlign: TextAlign.center,
-          text: const TextSpan(
-            style: TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.w900,
-              height: 1.15,
-              letterSpacing: 0.3,
-            ),
-            children: [
-              TextSpan(
-                text: 'Safe care at\nyour ',
-                style: TextStyle(color: Color(0xFFBCA99B)),
-              ),
-              TextSpan(
-                text: 'doorstep',
-                style: TextStyle(color: HestiaColors.primary),
-              ),
-            ],
-          ),
-        ),
+  Widget _buildBusyPartnersSection() {
+    final slot = _getRecentAvailableSlot();
+    final cards = [
+      (
+        duration: '0.5 hr',
+        price: '₹25',
+        original: '₹125',
+        save: 'Save ₹100',
+        minutes: 30,
       ),
-      const SizedBox(height: 12),
-      const Center(
-        child: Text(
-          'Book trusted professionals in minutes.',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 15,
-            height: 1.4,
-            color: HestiaColors.textMedium,
-          ),
-        ),
+      (
+        duration: '1 hr',
+        price: '₹49',
+        original: '₹249',
+        save: 'Save ₹200',
+        minutes: 60,
       ),
-      const SizedBox(height: 28),
-      const Center(
-        child: Text(
-          'Services we offer',
+      (
+        duration: '1.5 hr',
+        price: '₹75',
+        original: '₹375',
+        save: 'Save ₹300',
+        minutes: 90,
+      ),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Our partners are busy right now',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w800,
-            color: Colors.black,
+            color: HestiaColors.textDark,
           ),
         ),
+        const SizedBox(height: 4),
+        const Text(
+          'Schedule & book for later',
+          style: TextStyle(fontSize: 14, color: HestiaColors.textMedium),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 210,
+          child: ListView.builder(
+            scrollDirection: Axis.horizontal,
+            itemCount: cards.length,
+            itemBuilder: (context, index) {
+              final card = cards[index];
+              final service =
+                  _homeServiceCatalog[index % _homeServiceCatalog.length];
+              return _busyPartnerCard(
+                nextSlot: slot.displayString,
+                duration: card.duration,
+                price: card.price,
+                originalPrice: card.original,
+                saveAmount: card.save,
+                serviceTitle: service.label,
+                durationMinutes: card.minutes,
+                initialDate: slot.date,
+                initialTimeSlot: slot.slot,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTrustworthySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Reliable & Trustworthy',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: HestiaColors.textDark,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Ensuring integrity through verified standards',
+          style: TextStyle(fontSize: 14, color: HestiaColors.textMedium),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            _trustCard(
+              title: 'Background\nVerified',
+              icon: Icons.shield_outlined,
+              gradientColors: const [Color(0xFFFAF2EB), Colors.white],
+            ),
+            const SizedBox(width: 10),
+            _trustCard(
+              title: 'Trained\nCaregivers',
+              icon: Icons.school_outlined,
+              gradientColors: const [Color(0xFFF5ECE3), Colors.white],
+            ),
+            const SizedBox(width: 10),
+            _trustCard(
+              title: 'Consistent\nQuality',
+              icon: Icons.star_outline,
+              gradientColors: const [Color(0xFFFAF2EB), Colors.white],
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _buildInCoverageContent() {
+    final active = _activeBooking;
+    if (active != null && shouldFocusHomeOnActiveBooking(active)) {
+      return [
+        _buildActiveSessionFocusPanel(),
+        const SizedBox(height: 20),
+        _buildTrustworthySection(),
+        const SizedBox(height: 20),
+        _buildBrandBlock(),
+        const SizedBox(height: 12),
+        _buildTrustBadgesRow(),
+        const SizedBox(height: 88),
+      ];
+    }
+
+    return [
+      if (_activeBooking != null) ...[
+        _buildActiveBookingBanner(),
+        const SizedBox(height: 14),
+      ],
+      _buildPromoHero(),
+      const SizedBox(height: 18),
+      const Text(
+        'All care services',
+        style: TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w800,
+          color: HestiaColors.textDark,
+        ),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 2),
+      const Text(
+        'Schedule & book for later',
+        style: TextStyle(fontSize: 14, color: HestiaColors.textMedium),
+      ),
+      const SizedBox(height: 12),
       _buildServicesGrid(),
-      const SizedBox(height: 28),
+      const SizedBox(height: 20),
+      _buildBusyPartnersSection(),
+      const SizedBox(height: 16),
       const Text(
         'Book for Later',
         style: TextStyle(
           fontSize: 20,
           fontWeight: FontWeight.w800,
-          color: Colors.black,
+          color: HestiaColors.textDark,
         ),
       ),
-      const SizedBox(height: 4),
+      const SizedBox(height: 2),
       const Text(
         'Select your slot & stay worry-free',
-        style: TextStyle(
-          fontSize: 14,
-          color: HestiaColors.textMedium,
-        ),
+        style: TextStyle(fontSize: 14, color: HestiaColors.textMedium),
       ),
-      const SizedBox(height: 12),
+      const SizedBox(height: 10),
       Row(
         children: [
           _bookLaterCard(
@@ -2206,9 +3264,8 @@ class _HomeScreenState extends State<HomeScreen>
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) => const ScheduleScreen(
-                    serviceTitle: 'Post-Delivery Care',
-                  ),
+                  builder: (context) =>
+                      const ScheduleScreen(serviceTitle: 'Post-Delivery Care'),
                 ),
               );
             },
@@ -2234,7 +3291,13 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         ],
       ),
-      const SizedBox(height: 120),
+      const SizedBox(height: 20),
+      _buildTrustworthySection(),
+      const SizedBox(height: 20),
+      _buildBrandBlock(),
+      const SizedBox(height: 12),
+      _buildTrustBadgesRow(),
+      const SizedBox(height: 88),
     ];
   }
 
@@ -2443,10 +3506,10 @@ class _HomeScreenState extends State<HomeScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                if (!_isWithinCoverage) ..._buildComingSoonContent(),
+                  if (!_isWithinCoverage) ..._buildComingSoonContent(),
 
-                if (_isWithinCoverage) ..._buildInCoverageContent(),
-              ],
+                  if (_isWithinCoverage) ..._buildInCoverageContent(),
+                ],
               ),
             ),
           ],
@@ -2461,8 +3524,9 @@ class _HomeScreenState extends State<HomeScreen>
     final controller = _navAnimationController!;
     final bottomInset = MediaQuery.of(context).padding.bottom;
     final navVisible = _currentTabIndex != 2;
+    final cartVisible = _serviceMinutes.isNotEmpty && _isWithinCoverage;
     // Nav bar: ~74px content + 12px bottom margin, plus gap above it.
-    final cartBottom = _serviceMinutes.isNotEmpty
+    final cartBottom = cartVisible
         ? (navVisible ? bottomInset + 102 : bottomInset + 24)
         : -60.0;
 
@@ -2482,7 +3546,7 @@ class _HomeScreenState extends State<HomeScreen>
             right: 24,
             child: AnimatedOpacity(
               duration: const Duration(milliseconds: 250),
-              opacity: _serviceMinutes.isNotEmpty ? 1.0 : 0.0,
+              opacity: cartVisible ? 1.0 : 0.0,
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
@@ -2596,114 +3660,116 @@ class _HomeScreenState extends State<HomeScreen>
       bottomNavigationBar: _currentTabIndex == 2
           ? null
           : SafeArea(
-        top: false,
-        child: Container(
-          margin: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 0),
-          decoration: BoxDecoration(
-            color: HestiaColors.primary,
-            borderRadius: BorderRadius.circular(50),
-            boxShadow: [
-              BoxShadow(
-                color: HestiaColors.primary.withValues(alpha: 0.35),
-                blurRadius: 14,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: SizedBox(
-            height: 66,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final double totalWidth = constraints.maxWidth;
-                final double tabWidth = totalWidth / 3;
+              top: false,
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 0),
+                decoration: BoxDecoration(
+                  color: HestiaColors.primary,
+                  borderRadius: BorderRadius.circular(50),
+                  boxShadow: [
+                    BoxShadow(
+                      color: HestiaColors.primary.withValues(alpha: 0.35),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: SizedBox(
+                  height: 66,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double totalWidth = constraints.maxWidth;
+                      final double tabWidth = totalWidth / 3;
 
-                return AnimatedBuilder(
-                  animation: controller,
-                  builder: (context, child) {
-                    final double t = controller.value;
-                    final double pillNormalWidth = tabWidth - 8;
+                      return AnimatedBuilder(
+                        animation: controller,
+                        builder: (context, child) {
+                          final double t = controller.value;
+                          final double pillNormalWidth = tabWidth - 8;
 
-                    final double centerSource =
-                        (_oldTabIndex + 0.5) * tabWidth;
-                    final double centerTarget =
-                        (_currentTabIndex + 0.5) * tabWidth;
+                          final double centerSource =
+                              (_oldTabIndex + 0.5) * tabWidth;
+                          final double centerTarget =
+                              (_currentTabIndex + 0.5) * tabWidth;
 
-                    double tLeft;
-                    double tRight;
+                          double tLeft;
+                          double tRight;
 
-                    if (_currentTabIndex > _oldTabIndex) {
-                      tRight = CurveTween(
-                        curve: Curves.easeOutQuart,
-                      ).transform(t);
-                      tLeft = CurveTween(
-                        curve: Curves.easeInQuad,
-                      ).transform(t);
-                    } else if (_currentTabIndex < _oldTabIndex) {
-                      tLeft = CurveTween(
-                        curve: Curves.easeOutQuart,
-                      ).transform(t);
-                      tRight = CurveTween(
-                        curve: Curves.easeInQuad,
-                      ).transform(t);
-                    } else {
-                      tLeft = t;
-                      tRight = t;
-                    }
+                          if (_currentTabIndex > _oldTabIndex) {
+                            tRight = CurveTween(
+                              curve: Curves.easeOutQuart,
+                            ).transform(t);
+                            tLeft = CurveTween(
+                              curve: Curves.easeInQuad,
+                            ).transform(t);
+                          } else if (_currentTabIndex < _oldTabIndex) {
+                            tLeft = CurveTween(
+                              curve: Curves.easeOutQuart,
+                            ).transform(t);
+                            tRight = CurveTween(
+                              curve: Curves.easeInQuad,
+                            ).transform(t);
+                          } else {
+                            tLeft = t;
+                            tRight = t;
+                          }
 
-                    final double leftSource =
-                        centerSource - pillNormalWidth / 2;
-                    final double leftTarget =
-                        centerTarget - pillNormalWidth / 2;
-                    final double rightSource =
-                        centerSource + pillNormalWidth / 2;
-                    final double rightTarget =
-                        centerTarget + pillNormalWidth / 2;
+                          final double leftSource =
+                              centerSource - pillNormalWidth / 2;
+                          final double leftTarget =
+                              centerTarget - pillNormalWidth / 2;
+                          final double rightSource =
+                              centerSource + pillNormalWidth / 2;
+                          final double rightTarget =
+                              centerTarget + pillNormalWidth / 2;
 
-                    double currentLeft =
-                        leftSource + (leftTarget - leftSource) * tLeft;
-                    double currentRight =
-                        rightSource + (rightTarget - rightSource) * tRight;
+                          double currentLeft =
+                              leftSource + (leftTarget - leftSource) * tLeft;
+                          double currentRight =
+                              rightSource +
+                              (rightTarget - rightSource) * tRight;
 
-                    if (currentLeft < 0.0) {
-                      currentLeft = 0.0;
-                    }
-                    if (currentRight > totalWidth) {
-                      currentRight = totalWidth;
-                    }
-                    final double currentWidth =
-                        (currentRight - currentLeft).clamp(
-                          pillNormalWidth,
-                          totalWidth,
-                        );
+                          if (currentLeft < 0.0) {
+                            currentLeft = 0.0;
+                          }
+                          if (currentRight > totalWidth) {
+                            currentRight = totalWidth;
+                          }
+                          final double currentWidth =
+                              (currentRight - currentLeft).clamp(
+                                pillNormalWidth,
+                                totalWidth,
+                              );
 
-                    Color getNavItemColor(int index) {
-                      const Color activeColor = HestiaColors.primary;
-                      final Color inactiveColor =
-                          Colors.white.withValues(alpha: 0.7);
-                      if (_oldTabIndex == _currentTabIndex) {
-                        return index == _currentTabIndex
-                            ? activeColor
-                            : inactiveColor;
-                      }
-                      if (index == _currentTabIndex) {
-                        return Color.lerp(
-                              inactiveColor,
-                              activeColor,
-                              t,
-                            ) ??
-                            activeColor;
-                      } else if (index == _oldTabIndex) {
-                        return Color.lerp(
-                              activeColor,
-                              inactiveColor,
-                              t,
-                            ) ??
-                            inactiveColor;
-                      } else {
-                        return inactiveColor;
-                      }
-                    }
+                          Color getNavItemColor(int index) {
+                            const Color activeColor = HestiaColors.primary;
+                            final Color inactiveColor = Colors.white.withValues(
+                              alpha: 0.7,
+                            );
+                            if (_oldTabIndex == _currentTabIndex) {
+                              return index == _currentTabIndex
+                                  ? activeColor
+                                  : inactiveColor;
+                            }
+                            if (index == _currentTabIndex) {
+                              return Color.lerp(
+                                    inactiveColor,
+                                    activeColor,
+                                    t,
+                                  ) ??
+                                  activeColor;
+                            } else if (index == _oldTabIndex) {
+                              return Color.lerp(
+                                    activeColor,
+                                    inactiveColor,
+                                    t,
+                                  ) ??
+                                  inactiveColor;
+                            } else {
+                              return inactiveColor;
+                            }
+                          }
 
                           String getTabLabel(int index) {
                             switch (index) {
@@ -2712,7 +3778,7 @@ class _HomeScreenState extends State<HomeScreen>
                               case 1:
                                 return 'Bookings';
                               case 2:
-                                return 'Hestia Money';
+                                return 'Money';
                               default:
                                 return '';
                             }
@@ -2766,58 +3832,29 @@ class _HomeScreenState extends State<HomeScreen>
                                 behavior: HitTestBehavior.opaque,
                                 child: Container(
                                   alignment: Alignment.center,
-                                  child: index == 2
-                                      ? Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Text(
-                                              'Hestia',
-                                              style: TextStyle(
-                                                color: color,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w700,
-                                                height: 1.05,
-                                                letterSpacing: 0.2,
-                                              ),
-                                            ),
-                                            Text(
-                                              'MONEY',
-                                              style: TextStyle(
-                                                color: color,
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w900,
-                                                height: 1.05,
-                                                letterSpacing: 0.6,
-                                              ),
-                                            ),
-                                          ],
-                                        )
-                                      : Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              getIconData(index),
-                                              color: color,
-                                              size: 22,
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              getTabLabel(index),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                color: color,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w600,
-                                                letterSpacing: 0.2,
-                                              ),
-                                            ),
-                                          ],
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        getIconData(index),
+                                        color: color,
+                                        size: 22,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        getTabLabel(index),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: color,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: 0.2,
                                         ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             );
