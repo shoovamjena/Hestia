@@ -119,9 +119,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   /// Instant bookings start ASAP — no slot picker.
   void _applyInstantScheduleNow() {
-    final now = DateTime.now();
-    _scheduledDate = DateTime(now.year, now.month, now.day);
-    _scheduledTimeSlot = formatBookingTimeLabel(now);
+    final arrivalWindow = DateTime.now().add(instantTravelBuffer);
+    _scheduledDate = DateTime(
+      arrivalWindow.year,
+      arrivalWindow.month,
+      arrivalWindow.day,
+    );
+    _scheduledTimeSlot = formatBookingTimeLabel(arrivalWindow);
     _repeatOption = 'Once';
   }
 

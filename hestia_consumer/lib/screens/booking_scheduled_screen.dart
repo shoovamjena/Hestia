@@ -61,6 +61,8 @@ class _BookingScheduledScreenState extends State<BookingScheduledScreen> {
   bool _refreshing = false;
   bool _isCancelling = false;
   String? _bookingStatus;
+  bool _isInstant = false;
+  DateTime? _expectedArrivalAt;
   Timer? _lateTimer;
 
   @override
@@ -94,10 +96,14 @@ class _BookingScheduledScreenState extends State<BookingScheduledScreen> {
 
   bool get _isRunningLate =>
       _isAssigned &&
-      isProfessionalRunningLate(
-        scheduledStart: _scheduledStartLocal,
-        status: _bookingStatus,
-      );
+      isProfessionalRunningLateForBooking(_lateCheckBooking);
+
+  Map<String, dynamic> get _lateCheckBooking => {
+        'status': _bookingStatus,
+        'scheduled_start': _scheduledStartLocal,
+        'is_instant': _isInstant,
+        'expected_arrival_at': _expectedArrivalAt,
+      };
 
   String get _displayBookingId =>
       widget.bookingId.replaceAll(RegExp(r'[^0-9a-zA-Z]'), '').toUpperCase();
@@ -149,6 +155,13 @@ class _BookingScheduledScreenState extends State<BookingScheduledScreen> {
       setState(() {
         _isAssigned = assigned;
         _bookingStatus = status['status']?.toString() ?? _bookingStatus;
+        _isInstant = status['is_instant'] == true;
+        final expectedRaw = status['expected_arrival_at'];
+        if (expectedRaw is DateTime) {
+          _expectedArrivalAt = expectedRaw;
+        } else if (expectedRaw != null) {
+          _expectedArrivalAt = DateTime.tryParse(expectedRaw.toString());
+        }
         if (assigned) {
           _caregiverName = (name != null &&
                   name.isNotEmpty &&

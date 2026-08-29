@@ -27,7 +27,8 @@ class SessionArrivalEvent {
 class SessionArrivalCoordinator {
   SessionArrivalCoordinator._();
 
-  static final SessionArrivalCoordinator instance = SessionArrivalCoordinator._();
+  static final SessionArrivalCoordinator instance =
+      SessionArrivalCoordinator._();
 
   final StreamController<SessionArrivalEvent> _events =
       StreamController<SessionArrivalEvent>.broadcast();
@@ -94,10 +95,7 @@ class SessionArrivalCoordinator {
     final bookingId = parsed.bookingId;
     if (bookingId == null || bookingId.isEmpty) return;
 
-    await openVerifyArrival(
-      bookingId: bookingId,
-      sessionId: parsed.sessionId,
-    );
+    await openVerifyArrival(bookingId: bookingId, sessionId: parsed.sessionId);
   }
 
   Future<void> openVerifyArrival({
@@ -114,11 +112,12 @@ class SessionArrivalCoordinator {
       return;
     }
 
-    Map<String, dynamic>? booking =
-        await SupabaseService.getBookingStatus(bookingId);
+    Map<String, dynamic>? booking = await SupabaseService.getBookingStatus(
+      bookingId,
+    );
     booking ??= {
       'booking_id': bookingId,
-      if (sessionId != null) 'session_id': sessionId,
+      'session_id': ?sessionId,
       'status': 'arrived',
     };
 
@@ -137,10 +136,8 @@ class SessionArrivalCoordinator {
 
     await nav.push(
       MaterialPageRoute(
-        builder: (_) => TrackingScreen(
-          bookingData: booking!,
-          openVerifyOnLoad: true,
-        ),
+        builder: (_) =>
+            TrackingScreen(bookingData: booking!, openVerifyOnLoad: true),
       ),
     );
   }
@@ -165,12 +162,12 @@ class SessionArrivalCoordinator {
   _ParsedArrivalPayload _parsePayload(Map<String, dynamic> row) {
     final metadata = _coerceMap(row['metadata']);
     return _ParsedArrivalPayload(
-      bookingId: row['booking_id']?.toString() ??
-          metadata?['booking_id']?.toString(),
-      sessionId: row['session_id']?.toString() ??
-          metadata?['session_id']?.toString(),
-      notificationType: row['notification_type']?.toString() ??
-          row['type']?.toString(),
+      bookingId:
+          row['booking_id']?.toString() ?? metadata?['booking_id']?.toString(),
+      sessionId:
+          row['session_id']?.toString() ?? metadata?['session_id']?.toString(),
+      notificationType:
+          row['notification_type']?.toString() ?? row['type']?.toString(),
       action: metadata?['action']?.toString(),
     );
   }
@@ -214,10 +211,10 @@ class _ParsedArrivalPayload {
     }
 
     return _ParsedArrivalPayload(
-      bookingId: map['booking_id']?.toString() ??
-          metadata?['booking_id']?.toString(),
-      sessionId: map['session_id']?.toString() ??
-          metadata?['session_id']?.toString(),
+      bookingId:
+          map['booking_id']?.toString() ?? metadata?['booking_id']?.toString(),
+      sessionId:
+          map['session_id']?.toString() ?? metadata?['session_id']?.toString(),
       notificationType:
           map['notification_type']?.toString() ?? map['type']?.toString(),
       action: map['action']?.toString() ?? metadata?['action']?.toString(),

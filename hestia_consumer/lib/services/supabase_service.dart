@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../config/mapbox_config.dart';
 import '../utils/string_format.dart';
 
 class SupabaseService {
@@ -507,6 +509,145 @@ class SupabaseService {
     } catch (_) {
       return null;
     }
+  }
+
+  static bool isInstantBookingMetadata(Map<String, dynamic> metadata) {
+    if (metadata['is_instant'] == true) return true;
+    return metadata['assignment_deferred'] == false;
+  }
+
+  static DateTime? _parseIsoDateTime(dynamic raw) {
+    if (raw is DateTime) return raw;
+    if (raw == null) return null;
+    return DateTime.tryParse(raw.toString());
+  }
+
+  static Future<Map<String, double>?> _geocodeAddressForTravelEta(
+    String address,
+  ) async {
+    if (address.trim().isEmpty || MapboxConfig.accessToken.isEmpty) {
+      return null;
+    }
+    HttpClient? httpClient;
+    try {
+      httpClient = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      final url =
+          'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(address)}.json?access_token=${MapboxConfig.accessToken}&limit=1';
+      final request = await httpClient.getUrl(Uri.parse(url));
+      final response = await request.close().timeout(const Duration(seconds: 8));
+      final body = await response.transform(utf8.decoder).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final features = data['features'] as List?;
+      if (features == null || features.isEmpty) return null;
+      final center = (features.first as Map<String, dynamic>)['center'] as List?;
+      if (center == null || center.length < 2) return null;
+      return {
+        'lng': (center[0] as num).toDouble(),
+        'lat': (center[1] as num).toDouble(),
+      };
+    } catch (_) {
+      return null;
+    } finally {
+      httpClient?.close(force: true);
+    }
+  }
+
+  static Future<int?> _fetchDrivingEtaMinutes({
+    required double startLng,
+    required double startLat,
+    required double endLng,
+    required double endLat,
+  }) async {
+    if (MapboxConfig.accessToken.isEmpty) return null;
+    HttpClient? httpClient;
+    try {
+      httpClient = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      final url =
+          'https://api.mapbox.com/directions/v5/mapbox/driving/$startLng,$startLat;$endLng,$endLat?access_token=${MapboxConfig.accessToken}';
+      final request = await httpClient.getUrl(Uri.parse(url));
+      final response = await request.close().timeout(const Duration(seconds: 8));
+      final body = await response.transform(utf8.decoder).join();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final routes = data['routes'] as List?;
+      if (routes == null || routes.isEmpty) return null;
+      final durationSec =
+          (routes.first as Map<String, dynamic>)['duration'] as num?;
+      if (durationSec == null) return null;
+      return (durationSec / 60.0).round().clamp(1, 999);
+    } catch (_) {
+      return null;
+    } finally {
+      httpClient?.close(force: true);
+    }
+  }
+
+  /// Snapshots hub→customer ETA once when staff marks the session departed.
+  static Future<Map<String, dynamic>> maybeSnapshotInstantDepartureEta({
+    required String bookingId,
+    required Map<String, dynamic> metadata,
+    required String sessionStatus,
+    DateTime? sessionUpdatedAt,
+    required String hubAddress,
+    required String userAddress,
+    double? userLat,
+    double? userLng,
+  }) async {
+    if (!isInstantBookingMetadata(metadata)) return metadata;
+    if (metadata['expected_arrival_at'] != null) return metadata;
+
+    final normalized = sessionStatus.toLowerCase();
+    if (normalized != 'departed' && normalized != 'en_route') {
+      return metadata;
+    }
+
+    Map<String, double>? start;
+    Map<String, double>? end;
+    if (userLat != null && userLng != null) {
+      end = {'lat': userLat, 'lng': userLng};
+    } else if (userAddress.isNotEmpty) {
+      end = await _geocodeAddressForTravelEta(userAddress);
+    }
+    if (hubAddress.isNotEmpty) {
+      start = await _geocodeAddressForTravelEta(hubAddress);
+    }
+    if (start == null || end == null) return metadata;
+
+    final etaMin = await _fetchDrivingEtaMinutes(
+      startLng: start['lng']!,
+      startLat: start['lat']!,
+      endLng: end['lng']!,
+      endLat: end['lat']!,
+    );
+    if (etaMin == null) return metadata;
+
+    final departedAt = sessionUpdatedAt ?? DateTime.now();
+    final expectedArrival = departedAt.add(Duration(minutes: etaMin));
+    final updated = {
+      ...metadata,
+      'expected_arrival_at': expectedArrival.toIso8601String(),
+      'travel_eta_minutes': etaMin,
+      'departure_snapshot_at': departedAt.toIso8601String(),
+    };
+
+    try {
+      await client
+          .from('bookings')
+          .update({'notes': jsonEncode(updated)})
+          .eq('id', bookingId);
+    } catch (_) {}
+
+    return updated;
+  }
+
+  static Map<String, dynamic> _instantFieldsFromMetadata(
+    Map<String, dynamic> metadata,
+  ) {
+    return {
+      'is_instant': isInstantBookingMetadata(metadata),
+      'assignment_deferred': metadata['assignment_deferred'],
+      'expected_arrival_at': _parseIsoDateTime(metadata['expected_arrival_at']),
+      'travel_eta_minutes': metadata['travel_eta_minutes'],
+    };
   }
 
   static double _durationHoursFromBooking(Map<String, dynamic> row) {
@@ -1443,6 +1584,8 @@ class SupabaseService {
       'payment_id': paymentId,
       'care_notes': careNotes,
       'assignment_deferred': !assignProfessionalNow,
+      'is_instant': assignProfessionalNow,
+      if (assignProfessionalNow) 'instant_travel_buffer_minutes': 30,
     };
 
     final bookingInsert = <String, dynamic>{
@@ -1678,10 +1821,11 @@ class SupabaseService {
         String? sessionId;
         DateTime? actualStart;
         DateTime? actualEnd;
+        DateTime? sessionUpdatedAt;
         try {
           final sessionRes = await client
               .from('sessions')
-              .select('id, status, start_time, end_time')
+              .select('id, status, start_time, end_time, updated_at')
               .eq('booking_id', bookingId)
               .limit(1)
               .maybeSingle();
@@ -1691,6 +1835,10 @@ class SupabaseService {
             sessionId = sessionRes['id'] as String?;
             final startTimeStr = sessionRes['start_time'] as String?;
             final endTimeStr = sessionRes['end_time'] as String?;
+            final updatedAtRaw = sessionRes['updated_at']?.toString();
+            if (updatedAtRaw != null) {
+              sessionUpdatedAt = DateTime.tryParse(updatedAtRaw);
+            }
             if (startTimeStr != null) {
               actualStart = DateTime.parse(startTimeStr);
             }
@@ -1703,10 +1851,12 @@ class SupabaseService {
         const inTransit = {'departed', 'transit', 'en_route'};
         const arrivedOrLive = {'arrived', 'started', 'active', 'in_progress'};
         const terminal = {'completed', 'cancelled', 'no_show', 'unattended'};
+        final isInstant = isInstantBookingMetadata(metadata);
 
-        // Slot ended and pro never arrived → auto no-show.
+        // Slot ended and pro never arrived → auto no-show (scheduled only).
         var effectiveStatus = bookingStatus;
-        if (!terminal.contains(bookingStatus) &&
+        if (!isInstant &&
+            !terminal.contains(bookingStatus) &&
             !arrivedOrLive.contains(sessionStatus) &&
             !inTransit.contains(sessionStatus) &&
             !now.isBefore(scheduledEnd)) {
@@ -1792,6 +1942,17 @@ class SupabaseService {
           }
         } catch (_) {}
 
+        metadata = await maybeSnapshotInstantDepartureEta(
+          bookingId: bookingId,
+          metadata: metadata,
+          sessionStatus: sessionStatus,
+          sessionUpdatedAt: sessionUpdatedAt,
+          hubAddress: hubAddress,
+          userAddress: userAddress,
+          userLat: userLat,
+          userLng: userLng,
+        );
+
         final mapped = <String, dynamic>{
           'booking_id': bookingId,
           'session_id': sessionId,
@@ -1810,6 +1971,7 @@ class SupabaseService {
           'gst_amount': (metadata['gst_amount'] as num?)?.toDouble() ?? 0,
           'tip_amount': (metadata['tip_amount'] as num?)?.toInt() ?? 0,
           'status': effectiveStatus,
+          ..._instantFieldsFromMetadata(metadata),
           'caregiver_name': caregiverName,
           'professional_rating': professionalRating,
           'professional_total_sessions': professionalTotalSessions,
@@ -2787,17 +2949,17 @@ class SupabaseService {
           DateTime.now();
 
       final notesStr = response['notes'] as String?;
-      int totalAmount = 0;
-      String? careNotes;
-      String? addressId;
+      Map<String, dynamic> metadata = {};
       if (notesStr != null) {
         try {
-          final metadata = jsonDecode(notesStr) as Map<String, dynamic>;
-          totalAmount = metadata['total_amount'] as int? ?? 0;
-          careNotes = metadata['care_notes'] as String?;
-          addressId = metadata['address_id'] as String?;
+          metadata = Map<String, dynamic>.from(
+            jsonDecode(notesStr) as Map<String, dynamic>,
+          );
         } catch (_) {}
       }
+      final totalAmount = metadata['total_amount'] as int? ?? 0;
+      final careNotes = metadata['care_notes'] as String?;
+      final addressId = metadata['address_id'] as String?;
 
       String caregiverName = 'Professional';
       double professionalRating = 0.0;
@@ -2850,15 +3012,17 @@ class SupabaseService {
       DateTime? actualStart;
       DateTime? actualEnd;
       String? arrivalCode;
+      String sessionStatus = status.toLowerCase();
+      DateTime? sessionUpdatedAt;
       try {
         final sessionRes = await client
             .from('sessions')
-            .select('id, status, start_time, end_time, arrival_code')
+            .select('id, status, start_time, end_time, arrival_code, updated_at')
             .eq('booking_id', bookingId)
             .limit(1)
             .maybeSingle();
         if (sessionRes != null) {
-          final sessionStatus =
+          sessionStatus =
               (sessionRes['status'] as String? ?? activeStatus).toLowerCase();
           // Prefer booking terminal statuses so no-show isn't overwritten.
           final bookingTerminal = {'no_show', 'cancelled', 'completed'};
@@ -2867,12 +3031,27 @@ class SupabaseService {
               : sessionStatus;
           sessionId = sessionRes['id'] as String?;
           arrivalCode = sessionRes['arrival_code']?.toString();
+          final updatedAtRaw = sessionRes['updated_at']?.toString();
+          if (updatedAtRaw != null) {
+            sessionUpdatedAt = DateTime.tryParse(updatedAtRaw);
+          }
           final startTimeStr = sessionRes['start_time'] as String?;
           final endTimeStr = sessionRes['end_time'] as String?;
           if (startTimeStr != null) actualStart = DateTime.parse(startTimeStr);
           if (endTimeStr != null) actualEnd = DateTime.parse(endTimeStr);
         }
       } catch (_) {}
+
+      metadata = await maybeSnapshotInstantDepartureEta(
+        bookingId: bookingId,
+        metadata: metadata,
+        sessionStatus: sessionStatus,
+        sessionUpdatedAt: sessionUpdatedAt,
+        hubAddress: hubAddress,
+        userAddress: userAddress,
+        userLat: userLat,
+        userLng: userLng,
+      );
 
       return {
         'booking_id': bookingId,
@@ -2883,6 +3062,7 @@ class SupabaseService {
         'scheduled_start': scheduledStart,
         'actual_start': actualStart,
         'actual_end': actualEnd,
+        ..._instantFieldsFromMetadata(metadata),
         'amount': totalAmount,
         'status': activeStatus,
         'caregiver_name': caregiverName,

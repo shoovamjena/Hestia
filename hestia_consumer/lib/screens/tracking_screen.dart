@@ -344,6 +344,8 @@ class _TrackingScreenState extends State<TrackingScreen>
   }
 
   void _checkNoShowAndApologize(Map<String, dynamic> bookingData) {
+    if (isInstantBooking(bookingData)) return;
+
     final status = bookingData['status']?.toString().toLowerCase();
 
     // Session already with the client or finished — no apology flow.

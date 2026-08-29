@@ -6,6 +6,9 @@ import '../screens/tracking_screen.dart';
 import '../services/supabase_service.dart';
 import 'string_format.dart';
 
+/// Instant bookings include ~30 min travel time before the pro is considered late.
+const Duration instantTravelBuffer = Duration(minutes: 30);
+
 /// Whether the consumer should see live tracking (pro has left the hub).
 bool shouldOpenTrackingForBooking(Map<String, dynamic> booking) {
   final professionalId = booking['professional_id']?.toString();
@@ -133,6 +136,42 @@ String professionalOnTheWayMessage(String? caregiverName) {
   return '${professionalFirstName(caregiverName)} is on the way';
 }
 
+/// Instant bookings assign a professional immediately (`assignment_deferred: false`).
+bool isInstantBooking(Map<String, dynamic> booking) {
+  if (booking['is_instant'] == true) return true;
+  if (booking['assignment_deferred'] == false) return true;
+  return false;
+}
+
+/// For instant bookings, ignore the initial session `transit` row created at
+/// payment — only treat `departed` / `en_route` as having left the hub.
+bool hasDepartedHubForLateCheck(Map<String, dynamic> booking) {
+  final status = booking['status']?.toString().trim().toLowerCase() ?? '';
+  if (isInstantBooking(booking)) {
+    return status == 'departed' || status == 'en_route';
+  }
+  return status == 'departed' ||
+      status == 'transit' ||
+      status == 'en_route';
+}
+
+DateTime? expectedArrivalDeadline(Map<String, dynamic> booking) {
+  final raw = booking['expected_arrival_at'];
+  if (raw is DateTime) return raw;
+  if (raw != null) return DateTime.tryParse(raw.toString());
+  return null;
+}
+
+DateTime? scheduledStartFromBooking(Map<String, dynamic> booking) {
+  final raw = booking['scheduled_start'];
+  if (raw is DateTime) return raw;
+  if (raw != null) return DateTime.tryParse(raw.toString());
+  return SupabaseService.parseScheduledStartLocal(
+    booking['scheduled_date'],
+    booking['scheduled_time'],
+  );
+}
+
 /// True when the scheduled start has passed and the pro has not arrived yet.
 bool isProfessionalRunningLate({
   required DateTime? scheduledStart,
@@ -163,22 +202,37 @@ bool isProfessionalRunningLateForBooking(
 }) {
   if (isNoShowBooking(booking)) return false;
 
-  DateTime? start;
-  final raw = booking['scheduled_start'];
-  if (raw is DateTime) {
-    start = raw;
-  } else if (raw != null) {
-    start = DateTime.tryParse(raw.toString());
+  final status = booking['status']?.toString().trim().toLowerCase() ?? '';
+  const arrivedOrDone = {
+    'arrived',
+    'started',
+    'active',
+    'in_progress',
+    'completed',
+    'cancelled',
+    'no_show',
+    'unattended',
+  };
+  if (arrivedOrDone.contains(status)) return false;
+
+  final current = now ?? DateTime.now();
+
+  if (isInstantBooking(booking)) {
+    // Never late until the pro has actually left the hub.
+    if (!hasDepartedHubForLateCheck(booking)) return false;
+
+    // One-time ETA snapshot taken when staff marks departed.
+    final deadline = expectedArrivalDeadline(booking);
+    if (deadline != null) {
+      return current.isAfter(deadline);
+    }
+    return false;
   }
-  start ??= SupabaseService.parseScheduledStartLocal(
-    booking['scheduled_date'],
-    booking['scheduled_time'],
-  );
 
   return isProfessionalRunningLate(
-    scheduledStart: start,
-    status: booking['status']?.toString(),
-    now: now,
+    scheduledStart: scheduledStartFromBooking(booking),
+    status: status,
+    now: current,
   );
 }
 

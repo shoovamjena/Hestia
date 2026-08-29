@@ -238,22 +238,28 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       // Resolve no-shows before loading upcoming, so lists stay in sync.
-      activeBooking = await SupabaseService.getActiveBooking(user.id)
-          .timeout(const Duration(seconds: 12), onTimeout: () => null);
-      final results = await Future.wait<dynamic>([
-        () async {
-          var data = await SupabaseService.getUserProfile(user.id);
-          if (data == null || data['address'] == null) {
-            data = await SupabaseService.downloadProfileJson(user.id);
-          }
-          return data;
-        }(),
-        SupabaseService.getRecentSessions(user.id),
-        SupabaseService.getUpcomingBookings(user.id),
-      ]).timeout(
-        const Duration(seconds: 15),
-        onTimeout: () => <dynamic>[null, <Map<String, dynamic>>[], <Map<String, dynamic>>[]],
-      );
+      activeBooking = await SupabaseService.getActiveBooking(
+        user.id,
+      ).timeout(const Duration(seconds: 12), onTimeout: () => null);
+      final results =
+          await Future.wait<dynamic>([
+            () async {
+              var data = await SupabaseService.getUserProfile(user.id);
+              if (data == null || data['address'] == null) {
+                data = await SupabaseService.downloadProfileJson(user.id);
+              }
+              return data;
+            }(),
+            SupabaseService.getRecentSessions(user.id),
+            SupabaseService.getUpcomingBookings(user.id),
+          ]).timeout(
+            const Duration(seconds: 15),
+            onTimeout: () => <dynamic>[
+              null,
+              <Map<String, dynamic>>[],
+              <Map<String, dynamic>>[],
+            ],
+          );
 
       profileData = results[0] as Map<String, dynamic>?;
       recent = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
@@ -281,8 +287,7 @@ class _HomeScreenState extends State<HomeScreen>
             }
           }
           _activeBooking = activeBooking;
-          if (activeBooking == null ||
-              !isProfessionalOnTheWay(activeBooking)) {
+          if (activeBooking == null || !isProfessionalOnTheWay(activeBooking)) {
             _activeBookingEtaMin = null;
           }
           _recentSessions = recent;
@@ -306,7 +311,10 @@ class _HomeScreenState extends State<HomeScreen>
     if (lat != null && lng != null) {
       try {
         final within = await SupabaseService.isPointWithinCoverage(lat, lng)
-            .timeout(const Duration(seconds: 6), onTimeout: () => _isWithinCoverage);
+            .timeout(
+              const Duration(seconds: 6),
+              onTimeout: () => _isWithinCoverage,
+            );
         if (mounted && within != _isWithinCoverage) {
           setState(() => _isWithinCoverage = within);
         }
@@ -326,8 +334,7 @@ class _HomeScreenState extends State<HomeScreen>
       final nextStatus = activeBooking?['status']?.toString();
       setState(() {
         _activeBooking = activeBooking;
-        if (activeBooking == null ||
-            !isProfessionalOnTheWay(activeBooking)) {
+        if (activeBooking == null || !isProfessionalOnTheWay(activeBooking)) {
           _activeBookingEtaMin = null;
         }
       });
@@ -349,12 +356,15 @@ class _HomeScreenState extends State<HomeScreen>
       final url =
           'https://api.mapbox.com/geocoding/v5/mapbox.places/${Uri.encodeComponent(address)}.json?access_token=${MapboxConfig.accessToken}&limit=1';
       final request = await client.getUrl(Uri.parse(url));
-      final response = await request.close().timeout(const Duration(seconds: 8));
+      final response = await request.close().timeout(
+        const Duration(seconds: 8),
+      );
       final body = await response.transform(utf8.decoder).join();
       final data = jsonDecode(body) as Map<String, dynamic>;
       final features = data['features'] as List?;
       if (features == null || features.isEmpty) return null;
-      final center = (features.first as Map<String, dynamic>)['center'] as List?;
+      final center =
+          (features.first as Map<String, dynamic>)['center'] as List?;
       if (center == null || center.length < 2) return null;
       return {
         'lng': (center[0] as num).toDouble(),
@@ -383,10 +393,7 @@ class _HomeScreenState extends State<HomeScreen>
           professionalId: booking['professional_id']?.toString(),
         ).timeout(const Duration(seconds: 6), onTimeout: () => null);
         if (live != null) {
-          start = {
-            'lat': live['latitude']!,
-            'lng': live['longitude']!,
-          };
+          start = {'lat': live['latitude']!, 'lng': live['longitude']!};
         }
       } catch (_) {}
     }
@@ -400,7 +407,9 @@ class _HomeScreenState extends State<HomeScreen>
       final url =
           'https://api.mapbox.com/directions/v5/mapbox/driving/${start['lng']},${start['lat']};${end['lng']},${end['lat']}?access_token=${MapboxConfig.accessToken}';
       final request = await client.getUrl(Uri.parse(url));
-      final response = await request.close().timeout(const Duration(seconds: 8));
+      final response = await request.close().timeout(
+        const Duration(seconds: 8),
+      );
       final body = await response.transform(utf8.decoder).join();
       final data = jsonDecode(body) as Map<String, dynamic>;
       final routes = data['routes'] as List?;
@@ -600,152 +609,152 @@ class _HomeScreenState extends State<HomeScreen>
             children: [
               SizedBox(
                 height: 96,
-              width: double.infinity,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned.fill(
-                    child: ClipRRect(
-                      borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(15),
-                      ),
-                      child: _buildServiceIconImage(label, cover: true),
-                    ),
-                  ),
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(8),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.1),
-                            blurRadius: 4,
-                            offset: const Offset(0, 1),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.star,
-                            color: Color(0xFFFFB300),
-                            size: 11,
-                          ),
-                          const SizedBox(width: 2),
-                          Text(
-                            '$rating ($ratingCount)',
-                            style: const TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                              color: HestiaColors.textDark,
-                            ),
-                          ),
-                        ],
+                width: double.infinity,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned.fill(
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(15),
+                        ),
+                        child: _buildServiceIconImage(label, cover: true),
                       ),
                     ),
-                  ),
-                  if (_isWithinCoverage && !isAdded)
                     Positioned(
-                      right: 8,
-                      bottom: -14,
-                      child: GestureDetector(
-                        onTap: () {
-                          addService();
-                        },
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: HestiaColors.primary,
-                              width: 1.6,
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 1),
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.12),
-                                blurRadius: 6,
-                                offset: const Offset(0, 2),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.star,
+                              color: Color(0xFFFFB300),
+                              size: 11,
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              '$rating ($ratingCount)',
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: HestiaColors.textDark,
                               ),
-                            ],
-                          ),
-                          child: const Icon(
-                            Icons.add,
-                            color: HestiaColors.primary,
-                            size: 22,
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                10,
-                _isWithinCoverage && !isAdded ? 14 : 6,
-                10,
-                8,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: HestiaColors.textDark,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        displayPrice,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          color: HestiaColors.textDark,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Flexible(
-                        child: Text(
-                          displayOriginalPrice,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF9E9186),
-                            decoration: TextDecoration.lineThrough,
+                    if (_isWithinCoverage && !isAdded)
+                      Positioned(
+                        right: 8,
+                        bottom: -14,
+                        child: GestureDetector(
+                          onTap: () {
+                            addService();
+                          },
+                          child: Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: HestiaColors.primary,
+                                width: 1.6,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.12),
+                                  blurRadius: 6,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.add,
+                              color: HestiaColors.primary,
+                              size: 22,
+                            ),
                           ),
-                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                    ],
-                  ),
-                  if (_isWithinCoverage && isAdded) ...[
-                    const SizedBox(height: 8),
-                    _buildStepper(label, minutes),
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  10,
+                  _isWithinCoverage && !isAdded ? 14 : 6,
+                  10,
+                  8,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: HestiaColors.textDark,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          displayPrice,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: HestiaColors.textDark,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            displayOriginalPrice,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF9E9186),
+                              decoration: TextDecoration.lineThrough,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_isWithinCoverage && isAdded) ...[
+                      const SizedBox(height: 8),
+                      _buildStepper(label, minutes),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -1491,7 +1500,7 @@ class _HomeScreenState extends State<HomeScreen>
                       Text(
                         runningLate
                             ? professionalRunningLateMessage(
-                                caregiverName?.toString(),
+                                caregiverName.toString(),
                               )
                             : 'Professional: $caregiverName',
                         style: TextStyle(
@@ -1499,8 +1508,9 @@ class _HomeScreenState extends State<HomeScreen>
                           color: runningLate
                               ? const Color(0xFF8D4E00)
                               : Colors.grey.shade600,
-                          fontWeight:
-                              runningLate ? FontWeight.w600 : FontWeight.w400,
+                          fontWeight: runningLate
+                              ? FontWeight.w600
+                              : FontWeight.w400,
                         ),
                       ),
                     ],
@@ -1553,11 +1563,11 @@ class _HomeScreenState extends State<HomeScreen>
                       isNoShow
                           ? 'Leave review'
                           : status == 'active' ||
-                                  status == 'departed' ||
-                                  status == 'transit' ||
-                                  status == 'en_route'
-                              ? 'Track care'
-                              : 'View details',
+                                status == 'departed' ||
+                                status == 'transit' ||
+                                status == 'en_route'
+                          ? 'Track care'
+                          : 'View details',
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
@@ -1632,10 +1642,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           content: const Text(
             'This will cancel your Instant or Scheduled booking for both you and the professional. This cannot be undone.',
-            style: TextStyle(
-              color: HestiaColors.textMedium,
-              height: 1.4,
-            ),
+            style: TextStyle(color: HestiaColors.textMedium, height: 1.4),
           ),
           actions: [
             TextButton(
@@ -1734,7 +1741,11 @@ class _HomeScreenState extends State<HomeScreen>
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(
               children: [
-                Icon(Icons.search_rounded, color: Colors.grey.shade500, size: 20),
+                Icon(
+                  Icons.search_rounded,
+                  color: Colors.grey.shade500,
+                  size: 20,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
@@ -2384,10 +2395,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
     }
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: rows,
-    );
+    return Column(mainAxisSize: MainAxisSize.min, children: rows);
   }
 
   Widget _buildActiveBookingBanner() {
@@ -2395,7 +2403,8 @@ class _HomeScreenState extends State<HomeScreen>
     final isNoShow = isNoShowBooking(booking);
     final onTheWay = !isNoShow && isProfessionalOnTheWay(booking);
     final undergoing = !isNoShow && !onTheWay && isSessionUndergoing(booking);
-    final runningLate = !isNoShow &&
+    final runningLate =
+        !isNoShow &&
         !onTheWay &&
         !undergoing &&
         isProfessionalRunningLateForBooking(booking);
@@ -2403,41 +2412,41 @@ class _HomeScreenState extends State<HomeScreen>
     final scheduledStart = booking['scheduled_start'] is DateTime
         ? booking['scheduled_start'] as DateTime
         : DateTime.tryParse(booking['scheduled_start']?.toString() ?? '') ??
-            DateTime.now();
+              DateTime.now();
 
     final accent = isNoShow
         ? const Color(0xFFC0392B)
         : undergoing
-            ? const Color(0xFF2E6B4A)
-            : runningLate
-                ? const Color(0xFFE65100)
-                : HestiaColors.primary;
+        ? const Color(0xFF2E6B4A)
+        : runningLate
+        ? const Color(0xFFE65100)
+        : HestiaColors.primary;
     final accentSoft = isNoShow
         ? const Color(0xFFFDECEA)
         : undergoing
-            ? const Color(0xFFE8F5ED)
-            : runningLate
-                ? const Color(0xFFFFF3E0)
-                : const Color(0xFFFAF2EB);
+        ? const Color(0xFFE8F5ED)
+        : runningLate
+        ? const Color(0xFFFFF3E0)
+        : const Color(0xFFFAF2EB);
     final label = isNoShow
         ? 'NO SHOW'
         : undergoing
-            ? 'SESSION UNDERWAY'
-            : onTheWay
-                ? 'ON THE WAY'
-                : runningLate
-                    ? 'RUNNING LATE'
-                    : 'ACTIVE BOOKING';
+        ? 'SESSION UNDERWAY'
+        : onTheWay
+        ? 'ON THE WAY'
+        : runningLate
+        ? 'RUNNING LATE'
+        : 'ACTIVE BOOKING';
 
     final headline = isNoShow
         ? 'Session marked as no-show'
         : undergoing
-            ? '${professionalFirstName(caregiverName)} is with you now'
-            : onTheWay
-                ? professionalOnTheWayMessage(caregiverName)
-                : runningLate
-                    ? professionalRunningLateMessage(caregiverName)
-                    : '${booking['title']} · ${_formatBookingDate(scheduledStart)}';
+        ? '${professionalFirstName(caregiverName)} is with you now'
+        : onTheWay
+        ? professionalOnTheWayMessage(caregiverName)
+        : runningLate
+        ? professionalRunningLateMessage(caregiverName)
+        : '${booking['title']} · ${_formatBookingDate(scheduledStart)}';
 
     final etaLabel = _activeBookingEtaMin != null
         ? 'ETA $_activeBookingEtaMin min'
@@ -2446,12 +2455,12 @@ class _HomeScreenState extends State<HomeScreen>
     final subtitle = isNoShow
         ? 'Tap to leave a review'
         : undergoing
-            ? '${booking['title']} · started ${_formatBookingTime(scheduledStart)}'
-            : onTheWay
-                ? '$etaLabel · ${booking['title']} · ${_formatBookingTime(scheduledStart)}'
-                : runningLate
-                    ? '${booking['title']} · ${_formatBookingTime(scheduledStart)}'
-                    : '${displayCaregiverName(booking['caregiver_name']?.toString())} · ${_formatBookingTime(scheduledStart)}';
+        ? '${booking['title']} · started ${_formatBookingTime(scheduledStart)}'
+        : onTheWay
+        ? '$etaLabel · ${booking['title']} · ${_formatBookingTime(scheduledStart)}'
+        : runningLate
+        ? '${booking['title']} · ${_formatBookingTime(scheduledStart)}'
+        : '${displayCaregiverName(booking['caregiver_name']?.toString())} · ${_formatBookingTime(scheduledStart)}';
 
     return GestureDetector(
       onTap: () async {
@@ -2467,9 +2476,7 @@ class _HomeScreenState extends State<HomeScreen>
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: accent.withValues(alpha: 0.35),
-          ),
+          border: Border.all(color: accent.withValues(alpha: 0.35)),
           boxShadow: const [
             BoxShadow(
               color: Color(0x0A000000),
@@ -2483,10 +2490,7 @@ class _HomeScreenState extends State<HomeScreen>
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                width: 5,
-                color: accent,
-              ),
+              Container(width: 5, color: accent),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
@@ -2504,12 +2508,12 @@ class _HomeScreenState extends State<HomeScreen>
                           isNoShow
                               ? Icons.person_off_rounded
                               : undergoing
-                                  ? Icons.play_circle_fill_rounded
-                                  : onTheWay
-                                      ? Icons.directions_car_rounded
-                                      : runningLate
-                                          ? Icons.schedule_rounded
-                                          : Icons.health_and_safety,
+                              ? Icons.play_circle_fill_rounded
+                              : onTheWay
+                              ? Icons.directions_car_rounded
+                              : runningLate
+                              ? Icons.schedule_rounded
+                              : Icons.health_and_safety,
                           color: accent,
                           size: 24,
                         ),
@@ -2524,7 +2528,8 @@ class _HomeScreenState extends State<HomeScreen>
                               label,
                               style: TextStyle(
                                 fontSize: 10,
-                                color: isNoShow ||
+                                color:
+                                    isNoShow ||
                                         runningLate ||
                                         onTheWay ||
                                         undergoing
@@ -2540,9 +2545,7 @@ class _HomeScreenState extends State<HomeScreen>
                               style: TextStyle(
                                 color: HestiaColors.textDark,
                                 fontWeight: FontWeight.w800,
-                                fontSize: onTheWay ||
-                                        runningLate ||
-                                        undergoing
+                                fontSize: onTheWay || runningLate || undergoing
                                     ? 17
                                     : 14,
                                 height: 1.2,
@@ -2580,9 +2583,8 @@ class _HomeScreenState extends State<HomeScreen>
                                       ? accent
                                       : HestiaColors.textMedium,
                                   fontSize: 12,
-                                  fontWeight: isNoShow ||
-                                          runningLate ||
-                                          undergoing
+                                  fontWeight:
+                                      isNoShow || runningLate || undergoing
                                       ? FontWeight.w600
                                       : FontWeight.w400,
                                 ),
@@ -2593,10 +2595,7 @@ class _HomeScreenState extends State<HomeScreen>
                           ],
                         ),
                       ),
-                      Icon(
-                        Icons.chevron_right,
-                        color: accent,
-                      ),
+                      Icon(Icons.chevron_right, color: accent),
                     ],
                   ),
                 ),
@@ -2613,7 +2612,8 @@ class _HomeScreenState extends State<HomeScreen>
     final isNoShow = isNoShowBooking(booking);
     final onTheWay = !isNoShow && isProfessionalOnTheWay(booking);
     final undergoing = !isNoShow && isSessionUndergoing(booking);
-    final arrived = !isNoShow &&
+    final arrived =
+        !isNoShow &&
         !onTheWay &&
         !undergoing &&
         booking['status']?.toString().toLowerCase() == 'arrived';
@@ -2623,60 +2623,60 @@ class _HomeScreenState extends State<HomeScreen>
     final scheduledStart = booking['scheduled_start'] is DateTime
         ? booking['scheduled_start'] as DateTime
         : DateTime.tryParse(booking['scheduled_start']?.toString() ?? '') ??
-            DateTime.now();
+              DateTime.now();
 
     final accent = isNoShow
         ? const Color(0xFFC0392B)
         : undergoing
-            ? const Color(0xFF2E6B4A)
-            : HestiaColors.primary;
+        ? const Color(0xFF2E6B4A)
+        : HestiaColors.primary;
     final soft = isNoShow
         ? const Color(0xFFFDECEA)
         : undergoing
-            ? const Color(0xFFE8F5ED)
-            : const Color(0xFFFAF2EB);
+        ? const Color(0xFFE8F5ED)
+        : const Color(0xFFFAF2EB);
 
     final badge = isNoShow
         ? 'NO SHOW'
         : undergoing
-            ? 'SESSION UNDERWAY'
-            : onTheWay
-                ? 'ON THE WAY'
-                : arrived
-                    ? 'ARRIVED'
-                    : 'ACTIVE SESSION';
+        ? 'SESSION UNDERWAY'
+        : onTheWay
+        ? 'ON THE WAY'
+        : arrived
+        ? 'ARRIVED'
+        : 'ACTIVE SESSION';
 
     final headline = isNoShow
         ? 'This session needs your review'
         : undergoing
-            ? 'Your session is underway'
-            : onTheWay
-                ? professionalOnTheWayMessage(caregiverName)
-                : arrived
-                    ? '$firstName has arrived'
-                    : '$firstName is assigned for your care';
+        ? 'Your session is underway'
+        : onTheWay
+        ? professionalOnTheWayMessage(caregiverName)
+        : arrived
+        ? '$firstName has arrived'
+        : '$firstName is assigned for your care';
 
     final support = isNoShow
         ? 'Tap below to leave feedback and close this booking.'
         : undergoing
-            ? '$firstName is currently providing $title.'
-            : onTheWay
-                ? (_activeBookingEtaMin != null
-                    ? 'ETA $_activeBookingEtaMin min · $title'
-                    : 'Live tracking available · $title')
-                : arrived
-                    ? 'Verify arrival to start the care session.'
-                    : '$title · ${_formatBookingDate(scheduledStart)} · ${_formatBookingTime(scheduledStart)}';
+        ? '$firstName is currently providing $title.'
+        : onTheWay
+        ? (_activeBookingEtaMin != null
+              ? 'ETA $_activeBookingEtaMin min · $title'
+              : 'Live tracking available · $title')
+        : arrived
+        ? 'Verify arrival to start the care session.'
+        : '$title · ${_formatBookingDate(scheduledStart)} · ${_formatBookingTime(scheduledStart)}';
 
     final cta = isNoShow
         ? 'Leave a review'
         : undergoing
-            ? 'Open active session'
-            : onTheWay
-                ? 'Track professional'
-                : arrived
-                    ? 'Verify & start'
-                    : 'View active session';
+        ? 'Open active session'
+        : onTheWay
+        ? 'Track professional'
+        : arrived
+        ? 'Verify & start'
+        : 'View active session';
 
     return Container(
       width: double.infinity,
@@ -2719,18 +2719,15 @@ class _HomeScreenState extends State<HomeScreen>
               Container(
                 width: 56,
                 height: 56,
-                decoration: BoxDecoration(
-                  color: soft,
-                  shape: BoxShape.circle,
-                ),
+                decoration: BoxDecoration(color: soft, shape: BoxShape.circle),
                 child: Icon(
                   isNoShow
                       ? Icons.rate_review_rounded
                       : undergoing
-                          ? Icons.play_circle_fill_rounded
-                          : onTheWay
-                              ? Icons.directions_car_rounded
-                              : Icons.health_and_safety_rounded,
+                      ? Icons.play_circle_fill_rounded
+                      : onTheWay
+                      ? Icons.directions_car_rounded
+                      : Icons.health_and_safety_rounded,
                   color: accent,
                   size: 30,
                 ),
