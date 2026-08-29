@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../utils/string_format.dart';
 import 'supabase_service.dart';
 
 /// Matched caregiver profile used by booking / assignment flows.
@@ -78,7 +79,10 @@ class ProfessionalMatchingService {
   /// Maps a raw matching row into a [ProfessionalProfile].
   static ProfessionalProfile fromMatchRow(Map<String, dynamic> row) {
     final id = row['id']?.toString() ?? '';
-    final name = row['full_name']?.toString() ?? 'Professional';
+    final name = displayPersonName(
+      row['full_name']?.toString(),
+      fallback: 'Professional',
+    );
     final sessions =
         int.tryParse(row['total_sessions']?.toString() ?? '') ?? 0;
     final avgRatingVal =

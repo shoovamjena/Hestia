@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../utils/string_format.dart';
+import 'session_arrival_coordinator.dart';
 import 'supabase_service.dart';
 
 class NotificationsState {
@@ -21,7 +25,8 @@ class NotificationsState {
     await _localNotifications?.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (details) {
-        // Deep-link handling can be added here when needed.
+        SessionArrivalCoordinator.instance
+            .handleNotificationPayload(details.payload);
       },
     );
     await requestPermissions();
@@ -43,7 +48,10 @@ class NotificationsState {
     await macos?.requestPermissions(alert: true, badge: true, sound: true);
   }
 
-  Future<void> showLocalNotification(Map<String, dynamic> row) async {
+  Future<void> showLocalNotification(
+    Map<String, dynamic> row, {
+    Map<String, dynamic>? tapPayload,
+  }) async {
     if (_localNotifications == null) return;
 
     const androidDetails = AndroidNotificationDetails(
@@ -59,8 +67,21 @@ class NotificationsState {
     final id = row['id']?.toString().hashCode ?? 0;
     final title = row['title']?.toString() ?? 'Hestia Update';
     final body = row['body']?.toString() ?? '';
+    final payload = tapPayload == null ? null : jsonEncode(tapPayload);
 
-    await _localNotifications?.show(id, title, body, details);
+    await _localNotifications?.show(id, title, body, details, payload: payload);
+  }
+
+  /// Shows a local notification once per logical event (FCM + realtime share keys).
+  Future<void> handleIncomingNotification(Map<String, dynamic> row) async {
+    final keys = _dedupeKeysFor(row);
+    if (keys.isEmpty) return;
+    if (keys.any(_shownNotificationKeys.contains)) return;
+    _shownNotificationKeys.addAll(keys);
+
+    final tapPayload =
+        SessionArrivalCoordinator.instance.payloadForLocalNotification(row);
+    await showLocalNotification(row, tapPayload: tapPayload);
   }
 
   Future<void> initialize() async {
@@ -83,7 +104,13 @@ class NotificationsState {
             value: user.id,
           ),
           callback: (payload) async {
-            await _handleRealtimeNotification(payload.newRecord);
+            final row = Map<String, dynamic>.from(payload.newRecord);
+            final type = row['notification_type']?.toString();
+            if (type == 'professional_arrived') {
+              SessionArrivalCoordinator.instance
+                  .notifyArrivedFromNotificationRow(row);
+            }
+            await handleIncomingNotification(row);
           },
         )
         .subscribe();
@@ -103,13 +130,15 @@ class NotificationsState {
           callback: (payload) async {
             final row = payload.newRecord;
             if (_isRelevantBroadcast(row, user.id, _watchedHubIds)) {
-              await _handleRealtimeNotification(row);
+              await handleIncomingNotification(row);
             }
           },
         )
         .subscribe();
     _realtimeChannels.add(hubBroadcastChannel);
 
+    // Staff is source of truth for arrival. Listen for UI refresh only — do NOT
+    // show a second local notification here (user_notifications + FCM handle that).
     final arrivalChannel = SupabaseService.client
         .channel('consumer_arrivals_${user.id}')
         .onPostgresChanges(
@@ -118,72 +147,39 @@ class NotificationsState {
           table: 'sessions',
           callback: (payload) async {
             final row = payload.newRecord;
+            final old = payload.oldRecord;
             final status = row['status']?.toString().toLowerCase();
+            final oldStatus = old['status']?.toString().toLowerCase();
+            if (status != 'arrived' || oldStatus == 'arrived') return;
+
             final bookingId = row['booking_id']?.toString();
             final sessionId = row['id']?.toString();
-            if (status != 'arrived' || bookingId == null || sessionId == null) {
-              return;
-            }
+            if (bookingId == null || sessionId == null) return;
 
             if (!_watchedBookingIds.contains(bookingId)) {
-              _watchedBookingIds = await SupabaseService.getUserBookingIds(user.id);
-              if (!_watchedBookingIds.contains(bookingId)) {
-                return;
-              }
+              _watchedBookingIds =
+                  await SupabaseService.getUserBookingIds(user.id);
+              if (!_watchedBookingIds.contains(bookingId)) return;
             }
 
-            final bookingData = await SupabaseService.getBookingStatus(bookingId);
-            final caregiverName =
-                bookingData?['caregiver_name']?.toString() ?? 'Your professional';
-            await _handleRealtimeNotification({
-              'id': 'arrival_$sessionId',
-              'title': 'Professional arrived',
-              'body': '$caregiverName has confirmed arrival at your address.',
-            });
+            final bookingData =
+                await SupabaseService.getBookingStatus(bookingId);
+            SessionArrivalCoordinator.instance.notifySessionArrived(
+              bookingId: bookingId,
+              sessionId: sessionId,
+              caregiverName: displayPersonName(
+                bookingData?['caregiver_name']?.toString(),
+                fallback: 'Your professional',
+              ),
+              openVerify: true,
+            );
           },
         )
         .subscribe();
     _realtimeChannels.add(arrivalChannel);
 
-    // When a professional is assigned (T-45 job), show a local alert if app is open.
-    // Killed/background delivery is handled by FCM via send-push-notification.
-    final assignChannel = SupabaseService.client
-        .channel('consumer_assignments_${user.id}')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'bookings',
-          callback: (payload) async {
-            final row = payload.newRecord;
-            final old = payload.oldRecord;
-            final bookingId = row['id']?.toString();
-            final newPro = row['professional_id']?.toString();
-            final oldPro = old['professional_id']?.toString();
-            if (bookingId == null || newPro == null || newPro.isEmpty) return;
-            if (oldPro != null && oldPro.isNotEmpty) return;
-            if (row['user_id']?.toString() != user.id) {
-              if (!_watchedBookingIds.contains(bookingId)) {
-                _watchedBookingIds =
-                    await SupabaseService.getUserBookingIds(user.id);
-                if (!_watchedBookingIds.contains(bookingId)) return;
-              }
-            }
-
-            final bookingData =
-                await SupabaseService.getBookingStatus(bookingId);
-            final caregiverName =
-                bookingData?['caregiver_name']?.toString() ??
-                    'Your professional';
-            await _handleRealtimeNotification({
-              'id': 'assigned_${bookingId}_$newPro',
-              'title': 'Professional assigned',
-              'body':
-                  '$caregiverName will arrive for your upcoming booking.',
-            });
-          },
-        )
-        .subscribe();
-    _realtimeChannels.add(assignChannel);
+    // Assignment alerts come from user_notifications + FCM (deduped). Do not also
+    // listen to bookings updates here — that caused a third duplicate notification.
   }
 
   void disposeSubscription() {
@@ -194,11 +190,32 @@ class NotificationsState {
     _shownNotificationKeys.clear();
   }
 
-  Future<void> _handleRealtimeNotification(Map<String, dynamic> row) async {
+  Set<String> _dedupeKeysFor(Map<String, dynamic> row) {
+    final keys = <String>{};
     final id = row['id']?.toString() ?? '';
-    if (id.isEmpty || _shownNotificationKeys.contains(id)) return;
-    _shownNotificationKeys.add(id);
-    await showLocalNotification(row);
+    if (id.isNotEmpty) keys.add('id:$id');
+
+    final type = (row['notification_type'] ?? row['type'])?.toString();
+    final bookingId = row['booking_id']?.toString();
+    final sessionId = row['session_id']?.toString();
+    if (type != null &&
+        type.isNotEmpty &&
+        bookingId != null &&
+        bookingId.isNotEmpty) {
+      keys.add('event:$type:$bookingId');
+    }
+    if (type == 'professional_arrived' &&
+        sessionId != null &&
+        sessionId.isNotEmpty) {
+      keys.add('event:professional_arrived_session:$sessionId');
+    }
+
+    final title = row['title']?.toString() ?? '';
+    final body = row['body']?.toString() ?? '';
+    if (title.isNotEmpty && body.isNotEmpty) {
+      keys.add('content:$title|$body');
+    }
+    return keys;
   }
 
   bool _isRelevantBroadcast(

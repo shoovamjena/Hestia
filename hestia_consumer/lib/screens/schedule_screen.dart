@@ -6,6 +6,7 @@ import '../theme/colors.dart';
 import '../services/supabase_service.dart';
 import '../services/booking_flow_service.dart';
 import '../utils/active_booking_navigation.dart';
+import '../utils/string_format.dart';
 import 'booking_scheduled_screen.dart';
 import 'repeat_booking_screen.dart';
 import 'search_location_screen.dart';
@@ -315,7 +316,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         final profileData = data;
         if (profileData != null) {
           setState(() {
-            _userName = profileData['name'] ?? profileData['full_name'] ?? 'Soumya';
+            _userName = displayPersonName(
+              (profileData['name'] ?? profileData['full_name'])?.toString(),
+              fallback: 'Soumya',
+            );
             final authPhone = SupabaseService.currentUserPhone;
             _phone = (profileData['phone'] as String?)?.isNotEmpty == true
                 ? profileData['phone'] as String

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../utils/string_format.dart';
 
 class ActivityLogScreen extends StatefulWidget {
   final Map<String, dynamic> bookingData;
@@ -190,7 +191,10 @@ class _ActivityLogScreenState extends State<ActivityLogScreen> {
   @override
   Widget build(BuildContext context) {
     final bookingData = widget.bookingData;
-    final caregiverName = bookingData['caregiver_name'] ?? 'Professional';
+    final caregiverName = displayPersonName(
+      bookingData['caregiver_name']?.toString(),
+      fallback: 'Professional',
+    );
     final serviceTitle = bookingData['title'] ?? 'Care';
 
     return Scaffold(

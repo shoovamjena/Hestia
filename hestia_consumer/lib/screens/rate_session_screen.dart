@@ -5,6 +5,7 @@ import 'package:razorpay_flutter/razorpay_flutter.dart';
 import '../config/razorpay_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../utils/string_format.dart';
 
 class RateSessionScreen extends StatefulWidget {
   final Map<String, dynamic> sessionData;
@@ -114,8 +115,10 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
     final tip = _getTipAmount();
     if (tip > 0) {
       setState(() => _isSubmitting = true);
-      final caregiverName =
-          widget.sessionData['caregiver_name']?.toString() ?? 'your professional';
+      final caregiverName = displayPersonName(
+        widget.sessionData['caregiver_name']?.toString(),
+        fallback: 'your professional',
+      );
       final authEmail = SupabaseService.currentUserEmail;
 
       try {
@@ -382,7 +385,10 @@ class _RateSessionScreenState extends State<RateSessionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final caregiverName = widget.sessionData['caregiver_name'] ?? 'Sunita Rao';
+    final caregiverName = displayPersonName(
+      widget.sessionData['caregiver_name']?.toString(),
+      fallback: 'Sunita Rao',
+    );
     final title = widget.sessionData['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
     final professionalRating =

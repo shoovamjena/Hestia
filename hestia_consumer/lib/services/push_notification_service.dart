@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -7,8 +8,8 @@ import 'package:flutter/widgets.dart';
 
 import '../firebase_options.dart';
 import 'notifications_state.dart';
+import 'session_arrival_coordinator.dart';
 import 'supabase_service.dart';
-
 /// Registers FCM tokens so the server can push when the app is killed/backgrounded.
 ///
 /// Requires Firebase setup:
@@ -122,20 +123,34 @@ class PushNotificationService {
     final body = message.notification?.body ??
         message.data['body']?.toString() ??
         '';
-    final id = message.messageId ??
-        message.data['notification_id']?.toString() ??
+    // Prefer server notification_id so FCM matches the user_notifications row.
+    final id = message.data['notification_id']?.toString() ??
+        message.messageId ??
         DateTime.now().millisecondsSinceEpoch.toString();
 
-    await NotificationsState.instance.showLocalNotification({
+    await NotificationsState.instance.handleIncomingNotification({
       'id': id,
       'title': title,
       'body': body,
+      'notification_type': message.data['type']?.toString(),
+      'booking_id': message.data['booking_id']?.toString(),
+      'session_id': message.data['session_id']?.toString(),
+      'metadata': message.data['action'] != null
+          ? {'action': message.data['action']}
+          : null,
     });
   }
 
   void _onOpened(RemoteMessage message) {
-    // Deep-link hooks can route to booking/tracking using message.data['booking_id'].
-    debugPrint('FCM opened: ${message.data}');
+    final payload = jsonEncode({
+      'action': message.data['action'] ?? 'verify_arrival',
+      'notification_type':
+          message.data['type']?.toString() ?? 'professional_arrived',
+      'booking_id': message.data['booking_id']?.toString(),
+      'session_id': message.data['session_id']?.toString(),
+      'notification_id': message.data['notification_id']?.toString(),
+    });
+    SessionArrivalCoordinator.instance.handleNotificationPayload(payload);
   }
 }
 

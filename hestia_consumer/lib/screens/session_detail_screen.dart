@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../utils/string_format.dart';
 import 'receipt_screen.dart';
 import 'rate_session_screen.dart';
 
@@ -82,7 +83,10 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final caregiverName = _session['caregiver_name'] ?? 'Sunita Rao';
+    final caregiverName = displayPersonName(
+      _session['caregiver_name']?.toString(),
+      fallback: 'Sunita Rao',
+    );
     final title = _session['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
     

@@ -4,6 +4,8 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../utils/string_format.dart';
+
 class SupabaseService {
   // Static variable to store signup name in-memory during phone OTP signup flow
   static String? pendingSignUpName;
@@ -128,7 +130,11 @@ class SupabaseService {
     return await client.auth.signUp(
       phone: phone,
       password: password,
-      data: {'full_name': name, 'email': email, 'user_type': 'consumer'},
+      data: {
+        'full_name': displayPersonName(name, fallback: name.trim()),
+        'email': email,
+        'user_type': 'consumer',
+      },
     );
   }
 
@@ -144,7 +150,7 @@ class SupabaseService {
       email: email,
       password: password,
       data: {
-        'full_name': name,
+        'full_name': displayPersonName(name, fallback: name.trim()),
         'phone': phone,
         'phone_verified': false,
         'user_type': 'consumer',
@@ -282,7 +288,7 @@ class SupabaseService {
 
     final payload = <String, dynamic>{
       'id': id,
-      'full_name': fullName,
+      'full_name': displayPersonName(fullName, fallback: fullName.trim()),
       'updated_at': DateTime.now().toIso8601String(),
     };
     if (dbEmail != null) payload['email'] = dbEmail;
@@ -321,7 +327,11 @@ class SupabaseService {
 
     try {
       await client.auth.updateUser(
-        UserAttributes(data: {'full_name': fullName}),
+        UserAttributes(
+          data: {
+            'full_name': displayPersonName(fullName, fallback: fullName.trim()),
+          },
+        ),
       );
     } catch (_) {}
   }
@@ -1138,7 +1148,10 @@ class SupabaseService {
           .maybeSingle();
 
       final profile = {
-        'name': userResponse['full_name'],
+        'name': displayPersonName(
+          userResponse['full_name']?.toString(),
+          fallback: 'User',
+        ),
         'email': (userResponse['email'] as String?)?.isNotEmpty == true
             ? userResponse['email']
             : currentUserEmail,
@@ -1665,11 +1678,10 @@ class SupabaseService {
         String? sessionId;
         DateTime? actualStart;
         DateTime? actualEnd;
-        String? arrivalCode;
         try {
           final sessionRes = await client
               .from('sessions')
-              .select('id, status, start_time, end_time, arrival_code')
+              .select('id, status, start_time, end_time')
               .eq('booking_id', bookingId)
               .limit(1)
               .maybeSingle();
@@ -1677,7 +1689,6 @@ class SupabaseService {
             sessionStatus = (sessionRes['status'] as String? ?? sessionStatus)
                 .toLowerCase();
             sessionId = sessionRes['id'] as String?;
-            arrivalCode = sessionRes['arrival_code']?.toString();
             final startTimeStr = sessionRes['start_time'] as String?;
             final endTimeStr = sessionRes['end_time'] as String?;
             if (startTimeStr != null) {
@@ -1738,7 +1749,10 @@ class SupabaseService {
         int professionalTotalSessions = 0;
         if (row['professionals'] != null) {
           final professional = row['professionals'] as Map<String, dynamic>;
-          caregiverName = professional['full_name'] as String? ?? caregiverName;
+          caregiverName = displayPersonName(
+            professional['full_name']?.toString(),
+            fallback: caregiverName,
+          );
           professionalRating =
               double.tryParse(professional['avg_rating']?.toString() ?? '') ??
               0.0;
@@ -1756,12 +1770,14 @@ class SupabaseService {
         }
 
         String userAddress = '';
+        double? userLat;
+        double? userLng;
         try {
           final addressId = metadata['address_id'] as String?;
           if (addressId != null) {
             final addrRes = await client
                 .from('addresses')
-                .select('flat, street, city, pin_code')
+                .select('flat, street, city, pin_code, latitude, longitude')
                 .eq('id', addressId)
                 .maybeSingle();
             if (addrRes != null) {
@@ -1770,6 +1786,8 @@ class SupabaseService {
               final city = addrRes['city'] ?? '';
               final pin = addrRes['pin_code'] ?? '';
               userAddress = '$flat, $street, $city, $pin';
+              userLat = (addrRes['latitude'] as num?)?.toDouble();
+              userLng = (addrRes['longitude'] as num?)?.toDouble();
             }
           }
         } catch (_) {}
@@ -1798,8 +1816,9 @@ class SupabaseService {
           'hub_name': hubName,
           'hub_address': hubAddress,
           'user_address': userAddress,
+          'user_latitude': userLat,
+          'user_longitude': userLng,
           'arrival_requested': sessionStatus == 'arrived',
-          'arrival_code': arrivalCode,
           'care_notes': metadata['care_notes'],
           'duration_hours': hours,
           'isRated': isRated,
@@ -2345,8 +2364,10 @@ class SupabaseService {
           int professionalTotalSessions = 0;
           if (item['professionals'] != null) {
             final professional = item['professionals'] as Map<String, dynamic>;
-            caregiverName =
-                professional['full_name'] as String? ?? caregiverName;
+            caregiverName = displayPersonName(
+              professional['full_name']?.toString(),
+              fallback: caregiverName,
+            );
             professionalRating =
                 double.tryParse(professional['avg_rating']?.toString() ?? '') ??
                 0.0;
@@ -2489,8 +2510,10 @@ class SupabaseService {
           int professionalTotalSessions = 0;
           if (item['professionals'] != null) {
             final professional = item['professionals'] as Map<String, dynamic>;
-            caregiverName =
-                professional['full_name'] as String? ?? caregiverName;
+            caregiverName = displayPersonName(
+              professional['full_name']?.toString(),
+              fallback: caregiverName,
+            );
             professionalRating =
                 double.tryParse(professional['avg_rating']?.toString() ?? '') ??
                 0.0;
@@ -2781,7 +2804,10 @@ class SupabaseService {
       int professionalTotalSessions = 0;
       if (response['professionals'] != null) {
         final professional = response['professionals'] as Map<String, dynamic>;
-        caregiverName = professional['full_name'] as String? ?? caregiverName;
+        caregiverName = displayPersonName(
+          professional['full_name']?.toString(),
+          fallback: caregiverName,
+        );
         professionalRating =
             double.tryParse(professional['avg_rating']?.toString() ?? '') ??
             0.0;
@@ -2798,11 +2824,13 @@ class SupabaseService {
       }
 
       String userAddress = '';
+      double? userLat;
+      double? userLng;
       if (addressId != null) {
         try {
           final addrRes = await client
               .from('addresses')
-              .select('flat, street, city, pin_code')
+              .select('flat, street, city, pin_code, latitude, longitude')
               .eq('id', addressId)
               .maybeSingle();
           if (addrRes != null) {
@@ -2811,6 +2839,8 @@ class SupabaseService {
             final city = addrRes['city'] ?? '';
             final pin = addrRes['pin_code'] ?? '';
             userAddress = '$flat, $street, $city, $pin';
+            userLat = (addrRes['latitude'] as num?)?.toDouble();
+            userLng = (addrRes['longitude'] as num?)?.toDouble();
           }
         } catch (_) {}
       }
@@ -2861,6 +2891,8 @@ class SupabaseService {
         'hub_name': hubName,
         'hub_address': hubAddress,
         'user_address': userAddress,
+        'user_latitude': userLat,
+        'user_longitude': userLng,
         'arrival_requested': activeStatus == 'arrived',
         'arrival_code': arrivalCode,
         'care_notes': careNotes,

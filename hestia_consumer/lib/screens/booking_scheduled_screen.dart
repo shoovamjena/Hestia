@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../services/supabase_service.dart';
 import '../theme/colors.dart';
 import '../utils/active_booking_navigation.dart';
+import '../utils/string_format.dart';
 import 'home_screen.dart';
 import 'refer_and_earn_screen.dart';
 
@@ -70,7 +71,7 @@ class _BookingScheduledScreenState extends State<BookingScheduledScreen> {
     if (initial != null &&
         initial.isNotEmpty &&
         initial.toLowerCase() != 'professional') {
-      _caregiverName = initial;
+      _caregiverName = displayPersonName(initial, fallback: initial);
       _isAssigned = true;
     }
     _refreshAssignment();
@@ -152,7 +153,7 @@ class _BookingScheduledScreenState extends State<BookingScheduledScreen> {
           _caregiverName = (name != null &&
                   name.isNotEmpty &&
                   name.toLowerCase() != 'professional')
-              ? name
+              ? displayPersonName(name, fallback: 'Your professional')
               : 'Your professional';
           _professionalRating = double.tryParse(
                 status['professional_rating']?.toString() ?? '',

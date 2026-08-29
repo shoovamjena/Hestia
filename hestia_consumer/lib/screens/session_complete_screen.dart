@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../utils/string_format.dart';
 import 'rate_session_screen.dart';
 
 class SessionCompleteScreen extends StatefulWidget {
@@ -42,7 +43,10 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final caregiverName = widget.bookingData['caregiver_name'] ?? 'Sunita Rao';
+    final caregiverName = displayPersonName(
+      widget.bookingData['caregiver_name']?.toString(),
+      fallback: 'Sunita Rao',
+    );
     final serviceTitle = widget.bookingData['title'] ?? 'Post-Delivery Care';
     final totalAmount = widget.bookingData['amount'] ?? 1497;
     final professionalRating =

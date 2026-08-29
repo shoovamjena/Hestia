@@ -7,6 +7,9 @@ import 'theme/colors.dart';
 
 import 'services/notifications_state.dart';
 import 'services/push_notification_service.dart';
+import 'services/session_arrival_coordinator.dart';
+
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +27,8 @@ void main() async {
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   } catch (_) {}
   await PushNotificationService.instance.initialize();
+
+  SessionArrivalCoordinator.instance.setNavigatorKey(appNavigatorKey);
 
   // If a persistent session exists on launch, register real-time updates immediately
   if (Supabase.instance.client.auth.currentSession != null) {
@@ -53,6 +58,7 @@ class HestiaApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: appNavigatorKey,
       title: 'Hestia',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(

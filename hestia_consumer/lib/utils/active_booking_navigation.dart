@@ -4,6 +4,7 @@ import '../screens/booking_scheduled_screen.dart';
 import '../screens/rate_session_screen.dart';
 import '../screens/tracking_screen.dart';
 import '../services/supabase_service.dart';
+import 'string_format.dart';
 
 /// Whether the consumer should see live tracking (pro has left the hub).
 bool shouldOpenTrackingForBooking(Map<String, dynamic> booking) {
@@ -52,7 +53,7 @@ bool isSessionUndergoing(Map<String, dynamic> booking) {
       status == 'in_progress';
 }
 
-/// Home should focus on the live booking instead of discovery content.
+/// Whether home should show the richer active-session card (still with discovery below).
 bool shouldFocusHomeOnActiveBooking(Map<String, dynamic> booking) {
   if (isNoShowBooking(booking)) return true;
   if (isProfessionalOnTheWay(booking)) return true;
@@ -61,7 +62,7 @@ bool shouldFocusHomeOnActiveBooking(Map<String, dynamic> booking) {
   final status = booking['status']?.toString().trim().toLowerCase() ?? '';
   if (status == 'arrived') return true;
 
-  // Assigned booking waiting to start / depart — keep home focused on it.
+  // Assigned booking waiting to start / depart.
   final caregiver = booking['caregiver_name']?.toString().trim() ?? '';
   final hasCaregiver =
       caregiver.isNotEmpty && caregiver.toLowerCase() != 'professional';
@@ -75,12 +76,57 @@ bool shouldFocusHomeOnActiveBooking(Map<String, dynamic> booking) {
   return false;
 }
 
+/// Stable key so "Post-Delivery" and "Post-Delivery Care" match as one reason.
+String serviceReasonKey(String? raw) {
+  final normalized = (raw ?? '')
+      .toLowerCase()
+      .replaceAll(RegExp(r'[\s\-_/]+'), '')
+      .replaceAll('care', '');
+  if (normalized.contains('postdelivery')) return 'postdelivery';
+  if (normalized.contains('babysitting')) return 'babysitting';
+  if (normalized.contains('mobility')) return 'mobility';
+  if (normalized.contains('prepregnancy')) return 'prepregnancy';
+  if (normalized.contains('bathing') || normalized.contains('grooming')) {
+    return 'bathing';
+  }
+  if (normalized.contains('concierge') ||
+      normalized.contains('administrative')) {
+    return 'concierge';
+  }
+  return normalized;
+}
+
+bool isSameServiceReason(String? a, String? b) {
+  final keyA = serviceReasonKey(a);
+  final keyB = serviceReasonKey(b);
+  if (keyA.isEmpty || keyB.isEmpty) return false;
+  return keyA == keyB;
+}
+
+/// True when [serviceLabel] matches the active booking's care reason.
+bool isServiceBlockedByActiveBooking(
+  Map<String, dynamic>? activeBooking,
+  String serviceLabel,
+) {
+  if (activeBooking == null) return false;
+  final activeTitle = activeBooking['title']?.toString() ??
+      activeBooking['service_type']?.toString();
+  return isSameServiceReason(activeTitle, serviceLabel);
+}
+
 String professionalFirstName(String? caregiverName) {
   final trimmed = caregiverName?.trim() ?? '';
   if (trimmed.isEmpty || trimmed.toLowerCase() == 'professional') {
     return 'Your professional';
   }
-  return trimmed.split(RegExp(r'\s+')).first;
+  return capitalizeWords(trimmed.split(RegExp(r'\s+')).first);
+}
+
+String displayCaregiverName(
+  String? caregiverName, {
+  String fallback = 'Professional',
+}) {
+  return displayPersonName(caregiverName, fallback: fallback);
 }
 
 String professionalOnTheWayMessage(String? caregiverName) {
@@ -215,6 +261,7 @@ Future<void> openActiveBookingScreen(
   BuildContext context, {
   required Map<String, dynamic> booking,
   required String userName,
+  bool openVerify = false,
 }) async {
   var resolved = Map<String, dynamic>.from(booking);
   final bookingId = resolved['booking_id']?.toString();
@@ -245,9 +292,14 @@ Future<void> openActiveBookingScreen(
   }
 
   if (shouldOpenTrackingForBooking(resolved)) {
+    final shouldVerify = openVerify ||
+        resolved['status']?.toString().toLowerCase() == 'arrived';
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => TrackingScreen(bookingData: resolved),
+        builder: (_) => TrackingScreen(
+          bookingData: resolved,
+          openVerifyOnLoad: shouldVerify,
+        ),
       ),
     );
     return;

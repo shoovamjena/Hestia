@@ -6,10 +6,12 @@ import 'dart:math';
 import '../config/mapbox_config.dart';
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../services/session_arrival_coordinator.dart';
 import 'service_detail_screen.dart';
 import 'repeat_booking_screen.dart';
 import 'schedule_screen.dart';
 import '../utils/active_booking_navigation.dart';
+import '../utils/string_format.dart';
 import 'rate_session_screen.dart';
 import 'session_detail_screen.dart';
 import 'receipt_screen.dart';
@@ -44,6 +46,7 @@ class _HomeScreenState extends State<HomeScreen>
   Map<String, dynamic>? _activeBooking;
   int? _activeBookingEtaMin;
   Timer? _activeBookingPollTimer;
+  StreamSubscription<SessionArrivalEvent>? _arrivalSub;
   List<Map<String, dynamic>> _recentSessions = [];
   AnimationController? _navAnimationController;
   String _selectedSessionCategory = 'All';
@@ -108,46 +111,25 @@ class _HomeScreenState extends State<HomeScreen>
   Widget _buildServiceIconImage(
     String label, {
     double size = 50,
-    bool fullWidth = false,
-    double? height,
-    double imageHeightMultiplier = 2.5,
+    bool cover = false,
   }) {
     final assetPath = ServiceDetailScreen.iconAssetFor(label);
 
-    if (fullWidth) {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final boxHeight = constraints.maxHeight.isFinite
-              ? constraints.maxHeight
-              : (height ?? 96);
-          final boxWidth = constraints.maxWidth.isFinite
-              ? constraints.maxWidth
-              : double.infinity;
-          final renderedImageHeight = boxHeight * imageHeightMultiplier;
-
-          return ClipRect(
-            child: Align(
-              alignment: Alignment.center,
-              child: Image.asset(
-                assetPath,
-                width: boxWidth,
-                height: renderedImageHeight,
-                fit: BoxFit.fitWidth,
-                alignment: Alignment.center,
-                errorBuilder: (context, error, stackTrace) {
-                  return SizedBox(
-                    height: renderedImageHeight,
-                    child: Align(
-                      alignment: Alignment.center,
-                      child: Icon(
-                        Icons.medical_services_outlined,
-                        size: boxHeight * 0.55,
-                        color: HestiaColors.primary,
-                      ),
-                    ),
-                  );
-                },
-              ),
+    if (cover) {
+      return Image.asset(
+        assetPath,
+        width: double.infinity,
+        height: double.infinity,
+        fit: BoxFit.cover,
+        alignment: Alignment.center,
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            color: const Color(0xFFBCA99B),
+            alignment: Alignment.center,
+            child: Icon(
+              Icons.medical_services_outlined,
+              size: size * 0.55,
+              color: HestiaColors.primary,
             ),
           );
         },
@@ -210,13 +192,17 @@ class _HomeScreenState extends State<HomeScreen>
     super.initState();
     _initAnimationController();
     _loadProfileData();
-    _activeBookingPollTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+    _arrivalSub = SessionArrivalCoordinator.instance.events.listen((_) {
+      if (mounted) _refreshActiveBookingQuietly();
+    });
+    _activeBookingPollTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       _refreshActiveBookingQuietly();
     });
   }
 
   @override
   void dispose() {
+    _arrivalSub?.cancel();
     _activeBookingPollTimer?.cancel();
     _navAnimationController?.dispose();
     super.dispose();
@@ -232,7 +218,10 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     // Set defaults from Auth user metadata first
-    final metadataName = user.userMetadata?['full_name'] ?? 'User';
+    final metadataName = displayPersonName(
+      user.userMetadata?['full_name']?.toString(),
+      fallback: 'User',
+    );
     if (mounted) {
       setState(() {
         _userName = metadataName;
@@ -275,7 +264,10 @@ class _HomeScreenState extends State<HomeScreen>
       if (mounted) {
         setState(() {
           if (profileData != null) {
-            _userName = profileData['name'] ?? _userName;
+            _userName = displayPersonName(
+              profileData['name']?.toString(),
+              fallback: _userName,
+            );
             _userInitials = _getInitials(_userName);
             _email = profileData['email'] ?? _email;
             _phone = profileData['phone'] ?? _phone;
@@ -556,6 +548,7 @@ class _HomeScreenState extends State<HomeScreen>
   ) {
     final minutes = _serviceMinutes[label] ?? 0;
     final isAdded = minutes > 0;
+    final isBlocked = _isServiceBlockedByActiveBooking(label);
     final double hourlyPrice =
         double.tryParse(price.replaceAll('₹', '').trim()) ?? 0.0;
     final double origHourlyPrice =
@@ -568,6 +561,10 @@ class _HomeScreenState extends State<HomeScreen>
         : '₹${origHourlyPrice.toStringAsFixed(0)}';
 
     Future<void> addService() async {
+      if (isBlocked) {
+        _showSameReasonBookingBlocked(label);
+        return;
+      }
       setState(() {
         _serviceMinutes[label] = 30;
       });
@@ -576,27 +573,33 @@ class _HomeScreenState extends State<HomeScreen>
       _openServiceDetail(label);
     }
 
-    return GestureDetector(
-      onTap: () => _openServiceDetail(label),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFFEEE6DE)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
+    return Opacity(
+      opacity: isBlocked ? 0.55 : 1,
+      child: GestureDetector(
+        onTap: () => _openServiceDetail(label),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isBlocked
+                  ? HestiaColors.primary.withValues(alpha: 0.35)
+                  : const Color(0xFFEEE6DE),
             ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 96,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                height: 96,
               width: double.infinity,
               child: Stack(
                 clipBehavior: Clip.none,
@@ -606,11 +609,7 @@ class _HomeScreenState extends State<HomeScreen>
                       borderRadius: const BorderRadius.vertical(
                         top: Radius.circular(15),
                       ),
-                      child: Container(
-                        color: const Color(0xFFBCA99B),
-                        alignment: Alignment.center,
-                        child: _buildServiceIconImage(label, size: 264),
-                      ),
+                      child: _buildServiceIconImage(label, cover: true),
                     ),
                   ),
                   Positioned(
@@ -747,10 +746,33 @@ class _HomeScreenState extends State<HomeScreen>
           ],
         ),
       ),
+      ),
+    );
+  }
+
+  bool _isServiceBlockedByActiveBooking(String label) {
+    return isServiceBlockedByActiveBooking(_activeBooking, label);
+  }
+
+  void _showSameReasonBookingBlocked(String label) {
+    final activeTitle =
+        _activeBooking?['title']?.toString() ?? 'this care service';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'You already have an active $activeTitle booking. '
+          'You can book a different care service.',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
   void _openServiceDetail(String label) {
+    if (_isServiceBlockedByActiveBooking(label)) {
+      _showSameReasonBookingBlocked(label);
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => ServiceDetailScreen(
@@ -936,6 +958,10 @@ class _HomeScreenState extends State<HomeScreen>
                 const Spacer(),
                 GestureDetector(
                   onTap: () {
+                    if (_isServiceBlockedByActiveBooking(serviceTitle)) {
+                      _showSameReasonBookingBlocked(serviceTitle);
+                      return;
+                    }
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (context) => ScheduleScreen(
@@ -1302,7 +1328,10 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildUpcomingCard(Map<String, dynamic> booking) {
-    final caregiverName = booking['caregiver_name'] ?? 'Sunita Rao';
+    final caregiverName = displayCaregiverName(
+      booking['caregiver_name']?.toString(),
+      fallback: 'Sunita Rao',
+    );
     final title = booking['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
     final status = booking['status'] as String? ?? 'pending';
@@ -1853,7 +1882,10 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildSessionCard(Map<String, dynamic> session) {
-    final caregiverName = session['caregiver_name'] ?? 'Sunita Rao';
+    final caregiverName = displayCaregiverName(
+      session['caregiver_name']?.toString(),
+      fallback: 'Sunita Rao',
+    );
     final title = session['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
 
@@ -2419,7 +2451,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ? '$etaLabel · ${booking['title']} · ${_formatBookingTime(scheduledStart)}'
                 : runningLate
                     ? '${booking['title']} · ${_formatBookingTime(scheduledStart)}'
-                    : '${booking['caregiver_name']} · ${_formatBookingTime(scheduledStart)}';
+                    : '${displayCaregiverName(booking['caregiver_name']?.toString())} · ${_formatBookingTime(scheduledStart)}';
 
     return GestureDetector(
       onTap: () async {
@@ -2793,9 +2825,10 @@ class _HomeScreenState extends State<HomeScreen>
             ),
           ),
           const SizedBox(height: 10),
-          const Text(
-            'New bookings are paused while this session is active.',
-            style: TextStyle(
+          Text(
+            'You can book other care services below — just not another '
+            '${booking['title'] ?? 'session'} while this one is active.',
+            style: const TextStyle(
               fontSize: 12.5,
               color: HestiaColors.textMedium,
               fontWeight: FontWeight.w500,
@@ -2845,6 +2878,7 @@ class _HomeScreenState extends State<HomeScreen>
         titleSuffix: ' each',
         subtitle: 'Families trust Hestia for safe, reliable care at home.',
         cta: 'BOOK NOW',
+        icon: Icons.local_offer_rounded,
       ),
       (
         title: 'Verified professionals ',
@@ -2852,6 +2886,7 @@ class _HomeScreenState extends State<HomeScreen>
         titleSuffix: '',
         subtitle: 'Background-checked caregivers for every booking.',
         cta: 'EXPLORE',
+        icon: Icons.verified_rounded,
       ),
       (
         title: 'Safe care, ',
@@ -2859,6 +2894,7 @@ class _HomeScreenState extends State<HomeScreen>
         titleSuffix: '',
         subtitle: 'Consistent, trained, and reliable home care support.',
         cta: 'BOOK NOW',
+        icon: Icons.health_and_safety_rounded,
       ),
     ];
 
@@ -2893,7 +2929,7 @@ class _HomeScreenState extends State<HomeScreen>
                       right: -20,
                       bottom: -30,
                       child: Icon(
-                        Icons.favorite_rounded,
+                        slide.icon,
                         size: 160,
                         color: Colors.white.withValues(alpha: 0.08),
                       ),
@@ -3201,22 +3237,15 @@ class _HomeScreenState extends State<HomeScreen>
 
   List<Widget> _buildInCoverageContent() {
     final active = _activeBooking;
-    if (active != null && shouldFocusHomeOnActiveBooking(active)) {
-      return [
-        _buildActiveSessionFocusPanel(),
-        const SizedBox(height: 20),
-        _buildTrustworthySection(),
-        const SizedBox(height: 20),
-        _buildBrandBlock(),
-        const SizedBox(height: 12),
-        _buildTrustBadgesRow(),
-        const SizedBox(height: 88),
-      ];
-    }
+    final showFocusPanel =
+        active != null && shouldFocusHomeOnActiveBooking(active);
 
     return [
-      if (_activeBooking != null) ...[
-        _buildActiveBookingBanner(),
+      if (active != null) ...[
+        if (showFocusPanel)
+          _buildActiveSessionFocusPanel()
+        else
+          _buildActiveBookingBanner(),
         const SizedBox(height: 14),
       ],
       _buildPromoHero(),
@@ -3230,9 +3259,11 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
       const SizedBox(height: 2),
-      const Text(
-        'Schedule & book for later',
-        style: TextStyle(fontSize: 14, color: HestiaColors.textMedium),
+      Text(
+        active != null
+            ? 'Book another care reason anytime — not a duplicate of your active one'
+            : 'Schedule & book for later',
+        style: const TextStyle(fontSize: 14, color: HestiaColors.textMedium),
       ),
       const SizedBox(height: 12),
       _buildServicesGrid(),
@@ -3262,10 +3293,15 @@ class _HomeScreenState extends State<HomeScreen>
               primaryColor: HestiaColors.primary,
             ),
             onTap: () {
+              const serviceTitle = 'Post-Delivery Care';
+              if (_isServiceBlockedByActiveBooking(serviceTitle)) {
+                _showSameReasonBookingBlocked(serviceTitle);
+                return;
+              }
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) =>
-                      const ScheduleScreen(serviceTitle: 'Post-Delivery Care'),
+                      const ScheduleScreen(serviceTitle: serviceTitle),
                 ),
               );
             },
@@ -3278,10 +3314,15 @@ class _HomeScreenState extends State<HomeScreen>
               primaryColor: HestiaColors.primary,
             ),
             onTap: () {
+              const serviceTitle = 'Post-Delivery Care';
+              if (_isServiceBlockedByActiveBooking(serviceTitle)) {
+                _showSameReasonBookingBlocked(serviceTitle);
+                return;
+              }
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (context) => RepeatBookingScreen(
-                    serviceTitle: 'Post-Delivery Care',
+                    serviceTitle: serviceTitle,
                     selectedDate: DateTime.now(),
                     selectedDuration: '3 hrs',
                   ),

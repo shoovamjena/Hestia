@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../theme/colors.dart';
 import '../services/supabase_service.dart';
+import '../utils/string_format.dart';
 
 class ChatScreen extends StatefulWidget {
   final String sessionId;
@@ -25,6 +26,9 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+
+  String get _caregiverDisplayName =>
+      displayPersonName(widget.caregiverName, fallback: 'Professional');
 
   @override
   void initState() {
@@ -105,7 +109,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
         title: Text(
-          widget.caregiverName,
+          _caregiverDisplayName,
           style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w800,
@@ -145,7 +149,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   alignment: Alignment.center,
                   child: Text(
-                    _getInitials(widget.caregiverName),
+                    _getInitials(_caregiverDisplayName),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 16,
@@ -159,7 +163,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.caregiverName,
+                        _caregiverDisplayName,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
@@ -433,7 +437,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String _senderLabel(String senderType, bool isMe) {
     if (isMe) return 'You';
     if (senderType == 'hub_manager') return 'Hub Dispatch';
-    if (senderType == 'professional') return widget.caregiverName;
+    if (senderType == 'professional') return _caregiverDisplayName;
     return senderType.isEmpty ? 'Support' : senderType.replaceAll('_', ' ');
   }
 

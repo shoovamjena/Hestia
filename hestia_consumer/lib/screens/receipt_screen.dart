@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/colors.dart';
+import '../utils/string_format.dart';
 
 class ReceiptScreen extends StatelessWidget {
   final Map<String, dynamic> sessionData;
@@ -7,7 +8,10 @@ class ReceiptScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final caregiverName = sessionData['caregiver_name'] ?? 'Sunita Rao';
+    final caregiverName = displayPersonName(
+      sessionData['caregiver_name']?.toString(),
+      fallback: 'Sunita Rao',
+    );
     final title = sessionData['title'] ?? 'Post-Delivery';
     final displayTitle = title.endsWith('Care') ? title : '$title Care';
     final totalAmount = sessionData['amount'] ?? 1497;

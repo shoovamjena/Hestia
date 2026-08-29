@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../theme/colors.dart';
 import '../services/notifications_state.dart';
 import '../services/supabase_service.dart';
+import '../utils/string_format.dart';
 import 'landing_screen.dart';
 import 'search_location_screen.dart';
 import 'pronto_money_screen.dart';
@@ -45,7 +46,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final user = SupabaseService.currentUser;
     if (user != null) {
       // Pre-populate with auth metadata
-      _name = user.userMetadata?['full_name'] ?? 'User';
+      _name = displayPersonName(
+        user.userMetadata?['full_name']?.toString(),
+        fallback: 'User',
+      );
       _email = SupabaseService.currentUserEmail;
       _phone = SupabaseService.currentUserPhone;
       _isPhoneVerified = SupabaseService.isPhoneVerified();
@@ -59,7 +63,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         if (profileMap != null) {
           if (mounted) {
             setState(() {
-              _name = profileMap['name'] ?? _name;
+              _name = displayPersonName(
+                profileMap['name']?.toString(),
+                fallback: _name,
+              );
               _email = profileMap['email'] ?? _email;
               _phone = profileMap['phone'] ?? _phone;
               _isPhoneVerified =

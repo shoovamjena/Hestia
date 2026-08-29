@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/supabase_service.dart';
 import '../theme/colors.dart';
+import '../utils/string_format.dart';
 import 'rate_session_screen.dart';
 
 class EmergencyScreen extends StatefulWidget {
@@ -162,7 +163,10 @@ class _EmergencyScreenState extends State<EmergencyScreen>
 
   @override
   Widget build(BuildContext context) {
-    final caregiver = widget.bookingData['caregiver_name'] ?? 'Sunita Rao';
+    final caregiver = displayPersonName(
+      widget.bookingData['caregiver_name']?.toString(),
+      fallback: 'Sunita Rao',
+    );
     final service = widget.bookingData['title'] ?? 'Post-Delivery Care';
 
     return Container(
